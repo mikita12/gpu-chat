@@ -28,6 +28,18 @@ async def models():
     return sorted(m["name"] for m in data.get("models", []))
 
 
+@app.get("/api/loaded")
+async def loaded():
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{OLLAMA_URL}/api/ps")
+        resp.raise_for_status()
+        data = resp.json()
+    return {
+        "loaded": [m["name"] for m in data.get("models", [])],
+        "default": MODEL,
+    }
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     model = req.model or MODEL

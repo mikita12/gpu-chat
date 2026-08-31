@@ -15,6 +15,7 @@
   button:disabled { opacity: 0.5; cursor: default; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
   select { padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; font-size: 0.95rem; max-width: 100%; }
+  #status { font-size: 0.85rem; color: #999; margin: -0.5rem 0 1rem; }
 </style>
 </head>
 <body>
@@ -22,6 +23,7 @@
   <h2>giga2 GPU chat</h2>
   <select id="model"><option>loading models...</option></select>
 </div>
+<div id="status"></div>
 <div id="chat"></div>
 <form id="form">
   <textarea id="input" rows="2" placeholder="Type a message..."></textarea>
@@ -33,23 +35,63 @@ const form = document.getElementById('form');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const modelSelect = document.getElementById('model');
+const statusEl = document.getElementById('status');
 let messages = [];
+let loadedModel = null;
 
-(async function loadModels() {
+function setStatus() {
+  statusEl.textContent = loadedModel
+    ? `Currently loaded in GPU memory: ${loadedModel}`
+    : 'No model currently loaded in GPU memory (first message on any model will take longer to load).';
+}
+
+async function refreshLoaded() {
   try {
-    const res = await fetch('/api/models');
-    const names = await res.json();
+    const res = await fetch('/api/loaded');
+    const data = await res.json();
+    loadedModel = data.loaded[0] || null;
+    setStatus();
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+(async function init() {
+  try {
+    const [namesRes, loadedData] = await Promise.all([
+      fetch('/api/models').then((r) => r.json()),
+      refreshLoaded(),
+    ]);
     modelSelect.innerHTML = '';
-    for (const name of names) {
+    for (const name of namesRes) {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
       modelSelect.appendChild(opt);
     }
+    const fallback = loadedData && loadedData.default;
+    const preferred = loadedModel || fallback;
+    if (preferred && namesRes.includes(preferred)) {
+      modelSelect.value = preferred;
+    }
   } catch (err) {
     modelSelect.innerHTML = '<option>failed to load models</option>';
   }
 })();
+
+modelSelect.addEventListener('change', () => {
+  if (loadedModel && modelSelect.value !== loadedModel) {
+    const ok = confirm(
+      `"${loadedModel}" is currently loaded in GPU memory. Switching to "${modelSelect.value}" will unload it and load the new one instead — this can take anywhere from several seconds to over a minute depending on model size.\n\n` +
+      `Anyone else currently chatting with "${loadedModel}" will have their next reply wait for this reload too, since only one model fits in memory at a time.\n\n` +
+      `Continue?`
+    );
+    if (!ok) {
+      modelSelect.value = loadedModel;
+    }
+  }
+});
 
 function addMessage(role, content) {
   const div = document.createElement('div');
@@ -94,6 +136,7 @@ form.addEventListener('submit', async (e) => {
       chatEl.scrollTop = chatEl.scrollHeight;
     }
     messages.push({ role: 'assistant', content: full });
+    refreshLoaded();
   } catch (err) {
     assistantDiv.textContent = '[error: ' + err + ']';
   } finally {
