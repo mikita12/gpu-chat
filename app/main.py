@@ -16,16 +16,28 @@ app = FastAPI()
 
 class ChatRequest(BaseModel):
     messages: list[dict]
+    model: str | None = None
+
+
+@app.get("/api/models")
+async def models():
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{OLLAMA_URL}/api/tags")
+        resp.raise_for_status()
+        data = resp.json()
+    return sorted(m["name"] for m in data.get("models", []))
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
+    model = req.model or MODEL
+
     async def stream():
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
                 "POST",
                 f"{OLLAMA_URL}/api/chat",
-                json={"model": MODEL, "messages": req.messages, "stream": True},
+                json={"model": model, "messages": req.messages, "stream": True},
             ) as response:
                 async for line in response.aiter_lines():
                     if not line:
