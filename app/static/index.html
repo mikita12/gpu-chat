@@ -127,14 +127,30 @@ form.addEventListener('submit', async (e) => {
     });
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
     let full = '';
+    let sawContent = false;
+    assistantDiv.textContent = 'loading model…';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      full += decoder.decode(value, { stream: true });
-      assistantDiv.textContent = full;
-      chatEl.scrollTop = chatEl.scrollHeight;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        const evt = JSON.parse(line);
+        if (evt.type === 'content') {
+          sawContent = true;
+          full += evt.text;
+          assistantDiv.textContent = full;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+        // 'ping' events keep the connection alive while a model loads; ignore them.
+      }
     }
+    if (!sawContent) assistantDiv.textContent = '';
     messages.push({ role: 'assistant', content: full });
     refreshLoaded();
   } catch (err) {
