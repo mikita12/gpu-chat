@@ -17,7 +17,7 @@ prompt it — no SSH tunnel needed.
 ## Install (run once, on giga2)
 
 ```bash
-git clone <this-repo-url> gpu-chat
+git clone git@github.com:mikita12/gpu-chat.git
 cd gpu-chat
 ./install.sh
 ```
