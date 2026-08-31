@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically check gpu-chat repo for updates
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=gpu-chat-update.service
+
+[Install]
+WantedBy=timers.target

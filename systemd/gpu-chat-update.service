@@ -1,0 +1,7 @@
+[Unit]
+Description=Check gpu-chat repo for updates and restart if changed
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+ExecStart=__REPO_DIR__/update.sh

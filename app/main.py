@@ -1,0 +1,41 @@
+import json
+import os
+
+import httpx
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from starlette.responses import StreamingResponse
+
+# Defaults assume this app runs on the same machine as Ollama.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8:27b")
+
+app = FastAPI()
+
+
+class ChatRequest(BaseModel):
+    messages: list[dict]
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    async def stream():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "POST",
+                f"{OLLAMA_URL}/api/chat",
+                json={"model": MODEL, "messages": req.messages, "stream": True},
+            ) as response:
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+
+    return StreamingResponse(stream(), media_type="text/plain")
+
+
+app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="static")

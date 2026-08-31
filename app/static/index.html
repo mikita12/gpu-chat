@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GPU Chat</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; background: #111; color: #eee; }
+  #chat { display: flex; flex-direction: column; gap: 0.75rem; min-height: 60vh; margin-bottom: 1rem; }
+  .msg { padding: 0.6rem 0.9rem; border-radius: 10px; max-width: 80%; white-space: pre-wrap; line-height: 1.4; }
+  .user { align-self: flex-end; background: #2b5fd9; }
+  .assistant { align-self: flex-start; background: #2a2a2a; }
+  form { display: flex; gap: 0.5rem; }
+  textarea { flex: 1; resize: none; font-family: inherit; font-size: 1rem; padding: 0.5rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; }
+  button { padding: 0 1.2rem; border-radius: 8px; border: none; background: #2b5fd9; color: white; font-size: 1rem; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+</style>
+</head>
+<body>
+<h2>giga2 GPU chat</h2>
+<div id="chat"></div>
+<form id="form">
+  <textarea id="input" rows="2" placeholder="Type a message..."></textarea>
+  <button type="submit" id="send">Send</button>
+</form>
+<script>
+const chatEl = document.getElementById('chat');
+const form = document.getElementById('form');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+let messages = [];
+
+function addMessage(role, content) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = content;
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return div;
+}
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  sendBtn.disabled = true;
+  messages.push({ role: 'user', content: text });
+  addMessage('user', text);
+  const assistantDiv = addMessage('assistant', '');
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages }),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      full += decoder.decode(value, { stream: true });
+      assistantDiv.textContent = full;
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+    messages.push({ role: 'assistant', content: full });
+  } catch (err) {
+    assistantDiv.textContent = '[error: ' + err + ']';
+  } finally {
+    sendBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
