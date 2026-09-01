@@ -2,36 +2,536 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GPU Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>gpu-chat</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 2rem auto; background: #111; color: #eee; }
-  #chat { display: flex; flex-direction: column; gap: 0.75rem; min-height: 60vh; margin-bottom: 1rem; }
-  .msg { padding: 0.6rem 0.9rem; border-radius: 10px; max-width: 80%; white-space: pre-wrap; line-height: 1.4; }
-  .user { align-self: flex-end; background: #2b5fd9; }
-  .assistant { align-self: flex-start; background: #2a2a2a; }
-  form { display: flex; gap: 0.5rem; }
-  textarea { flex: 1; resize: none; font-family: inherit; font-size: 1rem; padding: 0.5rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; }
-  button { padding: 0 1.2rem; border-radius: 8px; border: none; background: #2b5fd9; color: white; font-size: 1rem; cursor: pointer; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  #stop { background: #7a2b2b; }
-  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-  select { padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; font-size: 0.95rem; max-width: 100%; }
-  #status { font-size: 0.85rem; color: #999; margin: -0.5rem 0 1rem; }
+  /* ---------------------------------------------------------------------
+     Self-hosted webfonts. Inter ships as a single variable file covering
+     weights 400-700 (that's how Google's own CDN serves it today - one
+     file, one @font-face with a weight range); IBM Plex Mono is static,
+     one file per weight actually used.
+  --------------------------------------------------------------------- */
+  @font-face {
+    font-family: 'Inter';
+    src: url('/fonts/Inter-variable.woff2') format('woff2');
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'IBM Plex Mono';
+    src: url('/fonts/IBMPlexMono-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'IBM Plex Mono';
+    src: url('/fonts/IBMPlexMono-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  /* ---------------------------------------------------------------------
+     Design tokens. Every color/spacing/radius/type value used below comes
+     from one of these - no hardcoded hex or arbitrary px in the rules
+     that follow.
+  --------------------------------------------------------------------- */
+  :root {
+    /* spacing: 4px base scale */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    /* radii */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 14px;
+
+    /* type */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --font-size-xs: 0.75rem;
+    --font-size-sm: 0.875rem;
+    --font-size-base: 1rem;
+    --font-size-lg: 1.1875rem;
+    --font-size-xl: 1.5rem;
+    --line-height-tight: 1.3;
+    --line-height-base: 1.65;
+    --measure: 68ch;
+
+    /* motion */
+    --duration-fast: 120ms;
+    --duration-base: 190ms;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+    /* light theme (default) */
+    --color-bg: #ffffff;
+    --color-surface: #f5f5f6;
+    --color-surface-raised: #ffffff;
+    --color-border: #e1e1e4;
+    --color-border-strong: #c7c7cc;
+    --color-text: #17171a;
+    --color-text-muted: #6b6b74;
+    --color-text-faint: #97979f;
+    --color-accent: #2952cc;
+    --color-accent-hover: #1f3fa3;
+    --color-on-accent: #ffffff;
+    --color-danger: #b3261e;
+    --color-danger-bg: #fbeceb;
+    --color-danger-border: #eecbc8;
+    --color-queued: #8a5a12;
+    --color-queued-bg: #fbf1e2;
+    --color-queued-border: #f0ddb8;
+    --color-focus-ring: #2952cc;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-bg: #131316;
+      --color-surface: #1b1b1f;
+      --color-surface-raised: #202024;
+      --color-border: #303036;
+      --color-border-strong: #45454d;
+      --color-text: #ededf0;
+      --color-text-muted: #a3a3ab;
+      --color-text-faint: #737379;
+      --color-accent: #6f8fef;
+      --color-accent-hover: #8aa4f3;
+      --color-on-accent: #0d1526;
+      --color-danger: #ef6a62;
+      --color-danger-bg: #2a1715;
+      --color-danger-border: #4a251f;
+      --color-queued: #dba54c;
+      --color-queued-bg: #2a2010;
+      --color-queued-border: #4a3a1a;
+      --color-focus-ring: #8aa4f3;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --color-bg: #131316;
+    --color-surface: #1b1b1f;
+    --color-surface-raised: #202024;
+    --color-border: #303036;
+    --color-border-strong: #45454d;
+    --color-text: #ededf0;
+    --color-text-muted: #a3a3ab;
+    --color-text-faint: #737379;
+    --color-accent: #6f8fef;
+    --color-accent-hover: #8aa4f3;
+    --color-on-accent: #0d1526;
+    --color-danger: #ef6a62;
+    --color-danger-bg: #2a1715;
+    --color-danger-border: #4a251f;
+    --color-queued: #dba54c;
+    --color-queued-bg: #2a2010;
+    --color-queued-border: #4a3a1a;
+    --color-focus-ring: #8aa4f3;
+  }
+
+  /* --------------------------------------------------------------------- */
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-base);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 780px;
+    margin: 0 auto;
+    height: 100vh;
+    height: 100dvh;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+    flex-wrap: wrap;
+  }
+  .topbar h1 {
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .topbar-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  select {
+    appearance: none;
+    font: inherit;
+    font-size: var(--font-size-sm);
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0 var(--space-3);
+    height: 44px;
+    max-width: 46vw;
+    text-overflow: ellipsis;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    flex: none;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .icon-btn:hover { color: var(--color-text); background: var(--color-border); }
+  .icon-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; }
+
+  #status {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    padding: 0 var(--space-4);
+    min-height: 1.4em;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .chat {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .msg {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-width: min(var(--measure), 88%);
+  }
+  .msg.user {
+    align-self: flex-end;
+  }
+  .msg.assistant {
+    align-self: flex-start;
+    width: 100%;
+  }
+  .bubble {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-lg);
+    border: 1px solid transparent;
+  }
+  .msg.user .bubble {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+  .msg.assistant .bubble {
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
+  }
+  .msg.assistant[data-state="queued"] .bubble {
+    border-color: var(--color-queued-border);
+    background: var(--color-queued-bg);
+  }
+  .msg.assistant[data-state="generating"] .bubble {
+    border-color: var(--color-accent);
+  }
+  .msg.assistant[data-state="error"] .bubble {
+    border-color: var(--color-danger-border);
+    background: var(--color-danger-bg);
+  }
+
+  .state-label:not([hidden]) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    margin-bottom: var(--space-2);
+  }
+  .state-label[data-kind="queued"] { color: var(--color-queued); }
+  .state-label[data-kind="generating"] { color: var(--color-accent); }
+  .state-label[data-kind="error"] { color: var(--color-danger); }
+  .state-label[data-kind="stopped"] { color: var(--color-text-faint); }
+  .state-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+  }
+  .state-label[data-kind="generating"] .state-dot {
+    animation: pulse 1.4s var(--ease-out) infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .prose { word-wrap: break-word; overflow-wrap: break-word; }
+  .prose p { margin: 0 0 var(--space-3); }
+  .prose p:last-child { margin-bottom: 0; }
+  .prose ul, .prose ol { margin: 0 0 var(--space-3); padding-left: var(--space-5); }
+  .prose li { margin-bottom: var(--space-1); }
+  .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+    font-weight: 600;
+    line-height: var(--line-height-tight);
+    margin: var(--space-5) 0 var(--space-2);
+  }
+  .prose h1:first-child, .prose h2:first-child, .prose h3:first-child { margin-top: 0; }
+  .prose h1 { font-size: var(--font-size-xl); }
+  .prose h2 { font-size: var(--font-size-lg); }
+  .prose h3, .prose h4, .prose h5, .prose h6 { font-size: var(--font-size-base); }
+  .prose a { color: inherit; text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 2px; }
+  .prose code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--color-border);
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+  }
+  .code-block {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-3);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+  }
+  .code-block code {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    background: none;
+    padding: 0;
+    white-space: pre;
+  }
+
+  .cursor {
+    display: inline-block;
+    width: 0.55em;
+    height: 1.05em;
+    margin-left: 1px;
+    background: var(--color-accent);
+    vertical-align: text-bottom;
+    animation: blink 1s steps(1, start) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cursor { animation: none; opacity: 0.6; }
+    .state-label[data-kind="generating"] .state-dot { animation: none; }
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .meta-line {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-faint);
+    font-family: var(--font-mono);
+    margin-top: var(--space-2);
+  }
+
+  .error-actions:not([hidden]) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  .btn {
+    font: inherit;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    padding: 0 var(--space-4);
+    height: 40px;
+    min-width: 44px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  }
+  .btn:hover { background: var(--color-border); }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+
+  .composer {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg);
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    font: inherit;
+    font-size: 16px; /* prevents iOS focus-zoom */
+    line-height: var(--line-height-tight);
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    max-height: 200px;
+    min-height: 44px;
+  }
+  textarea::placeholder { color: var(--color-text-faint); }
+
+  button[type="submit"], #stop {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
+  }
+  button[type="submit"] svg, #stop svg { width: 19px; height: 19px; }
+  button[type="submit"] {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+  button[type="submit"]:hover:not(:disabled) { background: var(--color-accent-hover); }
+  button[type="submit"]:disabled { opacity: 0.4; cursor: default; }
+  #stop {
+    background: var(--color-danger);
+    color: #ffffff;
+  }
+  #stop.hidden { display: none; }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 480px) {
+    .topbar h1 { font-size: var(--font-size-base); }
+    select { max-width: 38vw; }
+  }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <h2>giga2 GPU chat</h2>
-  <select id="model"><option>loading models...</option></select>
+<div class="app">
+  <header class="topbar">
+    <h1>gpu-chat</h1>
+    <div class="topbar-controls">
+      <select id="model" aria-label="Model"><option>loading models…</option></select>
+      <button type="button" id="theme-toggle" class="icon-btn" aria-label="Toggle color theme">
+        <svg id="theme-icon-dark" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+        <svg id="theme-icon-light" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+    </div>
+  </header>
+  <div id="status" role="status" aria-live="polite"></div>
+  <main id="chat" class="chat" role="log" aria-live="polite" aria-label="Conversation"></main>
+  <form id="form" class="composer">
+    <label for="input" class="visually-hidden">Message</label>
+    <textarea id="input" rows="1" placeholder="Message…" aria-label="Message"></textarea>
+    <button type="submit" id="send" aria-label="Send message">
+      <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></svg>
+    </button>
+    <button type="button" id="stop" class="hidden" aria-label="Stop generating">
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+  </form>
 </div>
-<div id="status"></div>
-<div id="chat"></div>
-<form id="form">
-  <textarea id="input" rows="2" placeholder="Type a message..."></textarea>
-  <button type="submit" id="send">Send</button>
-  <button type="button" id="stop" style="display:none">Stop</button>
-</form>
 <script>
+'use strict';
+
+/* =========================================================================
+   Config / constants
+========================================================================= */
+
+const STATE = Object.freeze({
+  SUBMITTED: 'submitted',
+  QUEUED: 'queued',
+  GENERATING: 'generating',
+  DONE: 'done',
+  ERROR: 'error',
+});
+
+// message + whether a Retry affordance makes sense. Codes match exactly
+// what the backend actually emits (see app/api.py _error_event / _detail
+// and app/ollama.py OllamaGenerationError) - verified by reading the
+// backend source, not guessed.
+const ERROR_INFO = {
+  stall: { message: 'The model stopped responding.', retryable: true },
+  connection: { message: 'Could not reach the model server.', retryable: true },
+  upstream_unavailable: { message: 'The model server is temporarily unavailable.', retryable: true },
+  queue_full: { message: 'The server is busy right now.', retryable: true },
+  client_timeout: { message: 'Connection lost.', retryable: true },
+  oom: { message: 'The model ran out of GPU memory for this request.', retryable: false },
+  generation_failed: { message: 'Generation failed unexpectedly.', retryable: false },
+  unknown_model: { message: 'That model is not available anymore.', retryable: false },
+  invalid_request: { message: 'That message could not be sent as-is.', retryable: false },
+  unauthorized: { message: 'Not authorized.', retryable: false },
+  protocol: { message: 'The server sent something unexpected.', retryable: false },
+  unknown: { message: 'An unexpected error occurred.', retryable: false },
+};
+function errorInfo(code) {
+  return ERROR_INFO[code] || { message: 'An unexpected error occurred.', retryable: false };
+}
+
+const RENDER_INTERVAL_MS = 80;
+const SILENT_STREAM_TIMEOUT_MS = 25000; // no bytes at all for this long -> treat as dead
+const SCROLL_PIN_THRESHOLD_PX = 48;
+
+/* =========================================================================
+   DOM refs
+========================================================================= */
+
 const chatEl = document.getElementById('chat');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
@@ -39,56 +539,169 @@ const sendBtn = document.getElementById('send');
 const stopBtn = document.getElementById('stop');
 const modelSelect = document.getElementById('model');
 const statusEl = document.getElementById('status');
-let messages = [];
-let loadedModel = null;
-let currentController = null;
+const themeToggle = document.getElementById('theme-toggle');
+const themeIconDark = document.getElementById('theme-icon-dark');
+const themeIconLight = document.getElementById('theme-icon-light');
 
-function setStatus() {
-  statusEl.textContent = loadedModel
-    ? `Currently loaded in GPU memory: ${loadedModel}`
-    : 'No model currently loaded in GPU memory (first message on any model will take longer to load).';
+/* =========================================================================
+   Theme
+========================================================================= */
+
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem('gpu-chat-theme'); } catch {}
+  if (saved === 'light' || saved === 'dark') {
+    document.documentElement.setAttribute('data-theme', saved);
+  }
+  updateThemeIcon();
+})();
+
+function updateThemeIcon() {
+  const explicit = document.documentElement.getAttribute('data-theme');
+  const dark = explicit ? explicit === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  themeIconDark.style.display = dark ? 'none' : '';
+  themeIconLight.style.display = dark ? '' : 'none';
 }
 
-function setSending(isSending) {
-  sendBtn.disabled = isSending;
-  stopBtn.style.display = isSending ? '' : 'none';
-}
-
-stopBtn.addEventListener('click', () => {
-  if (currentController) currentController.abort();
+themeToggle.addEventListener('click', () => {
+  const current = document.documentElement.getAttribute('data-theme');
+  const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const currentlyDark = current ? current === 'dark' : systemDark;
+  const next = currentlyDark ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('gpu-chat-theme', next); } catch {}
+  updateThemeIcon();
 });
+
+/* =========================================================================
+   Markdown rendering - hand-rolled, no dependency.
+   Escapes raw text FIRST, transforms only the escaped string, and only
+   ever emits the specific tags this function itself produces - nothing
+   from message content (model output or user input) can inject markup.
+========================================================================= */
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderMarkdown(src) {
+  // Pull out fenced code blocks and inline code from the RAW source first
+  // (before escaping anything), so their content is escaped exactly once,
+  // in isolation, and never mistaken for **bold**/*italic* syntax.
+  const codeBlocks = [];
+  let text = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push({ lang, code });
+    return `@@CB${idx}@@`;
+  });
+
+  const inlineCodes = [];
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    const idx = inlineCodes.length;
+    inlineCodes.push(code);
+    return `@@IC${idx}@@`;
+  });
+
+  text = escapeHtml(text);
+
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  // Escaped already, so a literal '&' in a URL is safely &amp; by now -
+  // https:// only, which also rules out javascript: URIs.
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) =>
+    `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`
+  );
+
+  // Group consecutive list-item lines into <ul>/<ol>; ATX headers (#..######)
+  // become <h1>-<h6>.
+  const lines = text.split('\n');
+  const out = [];
+  let listType = null;
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  for (const line of lines) {
+    const heading = line.match(/^(#{1,6})\s+(.*)/);
+    const ul = line.match(/^[-*]\s+(.*)/);
+    const ol = line.match(/^\d+\.\s+(.*)/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      out.push(`<h${level}>${heading[2]}</h${level}>`);
+    } else if (ul) {
+      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+      out.push(`<li>${ul[1]}</li>`);
+    } else if (ol) {
+      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
+      out.push(`<li>${ol[1]}</li>`);
+    } else {
+      closeList();
+      out.push(line);
+    }
+  }
+  closeList();
+  text = out.join('\n');
+
+  // Paragraphs: blank-line-separated blocks become <p>, except ones that
+  // are already block HTML (lists/headers) or a lone code-block placeholder.
+  text = text
+    .split(/\n{2,}/)
+    .map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return '';
+      if (/^<(ul|ol|h[1-6])/.test(trimmed)) return block;
+      if (/^@@CB\d+@@$/.test(trimmed)) return block;
+      return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+    })
+    .join('\n');
+
+  text = text.replace(/@@IC(\d+)@@/g, (_, i) => `<code>${escapeHtml(inlineCodes[Number(i)])}</code>`);
+  text = text.replace(/@@CB(\d+)@@/g, (_, i) => {
+    const { code } = codeBlocks[Number(i)];
+    return `<pre class="code-block"><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`;
+  });
+
+  return text;
+}
+
+/* =========================================================================
+   Status line ("currently loaded in GPU memory: ...")
+========================================================================= */
+
+let loadedModel = null;
+
+function setIdleStatus() {
+  statusEl.textContent = loadedModel
+    ? `Loaded: ${loadedModel}`
+    : 'No model currently loaded (first message may take longer).';
+}
 
 async function refreshLoaded() {
   try {
     const res = await fetch('/api/loaded');
     const data = await res.json();
-    loadedModel = data.loaded[0] || null;
-    setStatus();
+    loadedModel = (data.loaded && data.loaded[0]) || null;
+    setIdleStatus();
     return data;
-  } catch (err) {
+  } catch {
     return null;
   }
 }
 
-(async function init() {
+(async function initModels() {
   try {
-    const [namesRes, loadedData] = await Promise.all([
+    const [names, loadedData] = await Promise.all([
       fetch('/api/models').then((r) => r.json()),
       refreshLoaded(),
     ]);
     modelSelect.innerHTML = '';
-    for (const name of namesRes) {
+    for (const name of names) {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
       modelSelect.appendChild(opt);
     }
-    const fallback = loadedData && loadedData.default;
-    const preferred = loadedModel || fallback;
-    if (preferred && namesRes.includes(preferred)) {
-      modelSelect.value = preferred;
-    }
-  } catch (err) {
+    const preferred = loadedModel || (loadedData && loadedData.default);
+    if (preferred && names.includes(preferred)) modelSelect.value = preferred;
+  } catch {
     modelSelect.innerHTML = '<option>failed to load models</option>';
   }
 })();
@@ -96,128 +709,378 @@ async function refreshLoaded() {
 modelSelect.addEventListener('change', () => {
   if (loadedModel && modelSelect.value !== loadedModel) {
     const ok = confirm(
-      `"${loadedModel}" is currently loaded in GPU memory. Switching to "${modelSelect.value}" will unload it and load the new one instead — this can take anywhere from several seconds to over a minute depending on model size.\n\n` +
-      `Anyone else currently chatting with "${loadedModel}" will have their next reply wait for this reload too, since only one model fits in memory at a time.\n\n` +
-      `Continue?`
+      `"${loadedModel}" is currently loaded in GPU memory. Switching to "${modelSelect.value}" will unload it and load the new one instead — this can take anywhere from several seconds to over a minute.\n\n` +
+      `Anyone else currently chatting with "${loadedModel}" will have their next reply wait for this reload too.\n\nContinue?`
     );
-    if (!ok) {
-      modelSelect.value = loadedModel;
-    }
+    if (!ok) modelSelect.value = loadedModel;
   }
 });
 
-function addMessage(role, content) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.textContent = content;
-  chatEl.appendChild(div);
-  chatEl.scrollTop = chatEl.scrollHeight;
-  return div;
+/* =========================================================================
+   Autoscroll - only when the user is already pinned to the bottom. Never
+   fights a manual scroll-up.
+========================================================================= */
+
+function isPinnedToBottom() {
+  return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < SCROLL_PIN_THRESHOLD_PX;
 }
+function scrollToBottom() {
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+/* =========================================================================
+   Composer: auto-grow textarea, Enter-to-send, on-screen-keyboard handling
+========================================================================= */
+
+function autoGrow() {
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 200)}px`;
+}
+input.addEventListener('input', autoGrow);
 
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     form.requestSubmit();
+  } else if (e.key === 'Escape' && activeExchange) {
+    activeExchange.controller.abort();
   }
 });
 
-form.addEventListener('submit', async (e) => {
+// Keep the composer above the on-screen keyboard on iOS Safari, which
+// shrinks visualViewport instead of the layout viewport when the keyboard
+// opens. Feature-detected; a no-op (regular scrolling) where unsupported.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const reposition = () => {
+    const offset = window.innerHeight - vv.height - vv.offsetTop;
+    document.querySelector('.app').style.paddingBottom = offset > 0 ? `${offset}px` : '';
+    if (isPinnedToBottom()) scrollToBottom();
+  };
+  vv.addEventListener('resize', reposition);
+  vv.addEventListener('scroll', reposition);
+}
+
+/* =========================================================================
+   Rendering a message bubble for a given exchange
+========================================================================= */
+
+function createAssistantMessage() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg assistant';
+  wrap.innerHTML =
+    '<div class="bubble">' +
+    '<div class="state-label" hidden></div>' +
+    '<div class="prose"></div>' +
+    '<div class="meta-line" hidden></div>' +
+    '<div class="error-actions" hidden></div>' +
+    '</div>';
+  chatEl.appendChild(wrap);
+  return wrap;
+}
+
+function createUserMessage(text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg user';
+  wrap.innerHTML = '<div class="bubble"></div>';
+  wrap.querySelector('.bubble').textContent = text;
+  chatEl.appendChild(wrap);
+  return wrap;
+}
+
+const STATE_LABELS = {
+  [STATE.SUBMITTED]: { kind: 'generating', text: 'Sending…' },
+  [STATE.QUEUED]: { kind: 'queued', text: null }, // filled in with position
+  [STATE.GENERATING]: { kind: 'generating', text: 'Generating' },
+};
+
+function renderExchange(ex) {
+  const el = ex.el;
+  el.dataset.state = ex.state;
+  const labelEl = el.querySelector('.state-label');
+  const proseEl = el.querySelector('.prose');
+  const metaEl = el.querySelector('.meta-line');
+  const actionsEl = el.querySelector('.error-actions');
+
+  if (ex.state === STATE.QUEUED || ex.state === STATE.SUBMITTED || ex.state === STATE.GENERATING) {
+    const info = STATE_LABELS[ex.state];
+    labelEl.hidden = false;
+    labelEl.dataset.kind = info.kind;
+    const text = ex.state === STATE.QUEUED ? `Queued — position ${ex.queuePosition}` : info.text;
+    labelEl.innerHTML = '<span class="state-dot"></span>' + escapeHtml(text);
+  } else if (ex.state === STATE.DONE && ex.stoppedEarly) {
+    labelEl.hidden = false;
+    labelEl.dataset.kind = 'stopped';
+    labelEl.innerHTML = '<span class="state-dot"></span>' + escapeHtml('Stopped');
+  } else {
+    labelEl.hidden = true;
+  }
+
+  const html = ex.stoppedEarly ? '' : renderMarkdown(ex.buffer);
+  proseEl.innerHTML = html + (ex.state === STATE.GENERATING && ex.buffer ? '<span class="cursor"></span>' : '');
+
+  if (ex.state === STATE.DONE && !ex.stoppedEarly) {
+    metaEl.hidden = false;
+    metaEl.textContent = formatMeta(ex);
+  } else if (ex.state === STATE.GENERATING && ex.buffer) {
+    metaEl.hidden = false;
+    metaEl.textContent = formatLiveMeta(ex);
+  } else {
+    metaEl.hidden = true;
+  }
+
+  if (ex.state === STATE.ERROR) {
+    labelEl.hidden = false;
+    labelEl.dataset.kind = 'error';
+    labelEl.innerHTML = '<span class="state-dot"></span>' + escapeHtml('Error');
+    const info = errorInfo(ex.errorCode);
+    proseEl.innerHTML = html
+      ? html + `<p class="error-text">${escapeHtml(info.message)}</p>`
+      : `<p class="error-text">${escapeHtml(info.message)}</p>`;
+    actionsEl.hidden = false;
+    actionsEl.innerHTML = '';
+    if (info.retryable) {
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn btn-primary';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => retryExchange(ex));
+      actionsEl.appendChild(retryBtn);
+    }
+  } else {
+    actionsEl.hidden = true;
+  }
+
+  if (isPinnedToBottom()) scrollToBottom();
+}
+
+function formatLiveMeta(ex) {
+  const elapsed = (performance.now() - (ex.firstTokenAt || ex.submittedAt)) / 1000;
+  const tps = elapsed > 0 ? (ex.tokenCount / elapsed).toFixed(1) : '0.0';
+  const ttft = ex.firstTokenAt ? `${Math.round(ex.firstTokenAt - ex.submittedAt)}ms` : '—';
+  return `TTFT ${ttft} · ~${tps} tok/s`;
+}
+
+function formatMeta(ex) {
+  const ttft = ex.firstTokenAt ? `${Math.round(ex.firstTokenAt - ex.submittedAt)}ms` : '—';
+  if (ex.doneMeta && ex.doneMeta.eval_count && ex.doneMeta.eval_duration) {
+    const tps = (ex.doneMeta.eval_count / (ex.doneMeta.eval_duration / 1e9)).toFixed(1);
+    return `TTFT ${ttft} · ${tps} tok/s · ${ex.doneMeta.eval_count} tokens`;
+  }
+  return `TTFT ${ttft}`;
+}
+
+/* RAF-throttled re-render: buffer text as it arrives, repaint at a capped
+   cadence instead of re-parsing markdown on every single stream chunk -
+   the main perf fix for low-end phones. */
+function markDirty(ex) {
+  ex._dirty = true;
+  scheduleTick(ex);
+}
+function scheduleTick(ex) {
+  if (ex._rafPending) return;
+  ex._rafPending = true;
+  requestAnimationFrame(() => tick(ex));
+}
+function tick(ex) {
+  ex._rafPending = false;
+  if (!ex._dirty) return;
+  const elapsed = performance.now() - (ex._lastRender || 0);
+  if (elapsed >= RENDER_INTERVAL_MS) {
+    ex._dirty = false;
+    ex._lastRender = performance.now();
+    renderExchange(ex);
+  } else {
+    scheduleTick(ex);
+  }
+}
+function flushNow(ex) {
+  ex._dirty = false;
+  ex._lastRender = performance.now();
+  renderExchange(ex);
+}
+
+/* =========================================================================
+   The exchange state machine + network loop
+========================================================================= */
+
+let conversationMessages = [];
+let activeExchange = null;
+
+function setComposerBusy(busy) {
+  sendBtn.disabled = busy;
+  sendBtn.style.display = busy ? 'none' : '';
+  stopBtn.classList.toggle('hidden', !busy);
+}
+
+stopBtn.addEventListener('click', () => {
+  if (activeExchange) activeExchange.controller.abort();
+});
+
+form.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = input.value.trim();
-  if (!text) return;
+  if (!text || activeExchange) return;
   input.value = '';
-  const controller = new AbortController();
-  currentController = controller;
-  setSending(true);
-  messages.push({ role: 'user', content: text });
-  addMessage('user', text);
-  const assistantDiv = addMessage('assistant', 'loading model…');
+  autoGrow();
+  createUserMessage(text);
+  const el = createAssistantMessage();
+  conversationMessages.push({ role: 'user', content: text });
+  runExchange(el, text);
+});
 
-  let full = '';
-  let gotDone = false;
-  let errorShown = false;
+function retryExchange(prevEx) {
+  if (activeExchange) return;
+  conversationMessages.push({ role: 'user', content: prevEx.userText });
+  runExchange(prevEx.el, prevEx.userText);
+}
 
-  function showError(text) {
-    assistantDiv.textContent = full ? `${full}\n\n[error: ${text}]` : `[error: ${text}]`;
-    errorShown = true;
-  }
+async function runExchange(el, userText) {
+  const ex = {
+    el,
+    userText,
+    state: STATE.SUBMITTED,
+    buffer: '',
+    tokenCount: 0,
+    queuePosition: null,
+    errorCode: null,
+    doneMeta: null,
+    submittedAt: performance.now(),
+    firstTokenAt: null,
+    controller: new AbortController(),
+    _dirty: false,
+    _rafPending: false,
+    _lastRender: 0,
+  };
+  activeExchange = ex;
+  setComposerBusy(true);
+  renderExchange(ex);
+
+  let silentTimer = null;
+  const resetSilentTimer = () => {
+    clearTimeout(silentTimer);
+    silentTimer = setTimeout(() => {
+      // Nothing at all arrived for a long time - a dropped mobile
+      // connection or a backgrounded tab can silently kill a stream
+      // without ever firing an error/abort event. Surface it instead of
+      // hanging forever.
+      ex.controller.abort('client_timeout');
+    }, SILENT_STREAM_TIMEOUT_MS);
+  };
+  resetSilentTimer();
 
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model: modelSelect.value }),
-      signal: controller.signal,
+      body: JSON.stringify({ messages: conversationMessages, model: modelSelect.value }),
+      signal: ex.controller.signal,
     });
+    resetSilentTimer();
+
     if (!res.ok) {
-      let detail = res.statusText;
-      try { detail = (await res.json()).detail || detail; } catch {}
-      if (res.status === 429) {
-        assistantDiv.textContent = `[server is busy, try again in a moment: ${detail}]`;
-      } else {
-        assistantDiv.textContent = `[error: ${detail}]`;
-      }
-      errorShown = true;
-    } else {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      readLoop: while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buffer.indexOf('\n')) >= 0) {
-          const line = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 1);
-          if (!line) continue;
-          let evt;
-          try {
-            evt = JSON.parse(line);
-          } catch {
-            showError('malformed response from server');
-            break readLoop; // framing is untrustworthy from here on
-          }
-          if (evt.type === 'content') {
-            full += evt.text;
-            assistantDiv.textContent = full;
-            chatEl.scrollTop = chatEl.scrollHeight;
-          } else if (evt.type === 'error') {
-            showError(evt.message);
-          } else if (evt.type === 'done') {
-            gotDone = true;
-            console.log('gpu-chat: done', evt);
-          } else if (evt.type === 'queued') {
-            statusEl.textContent = `Queued - position ${evt.position}...`;
-          } else if (evt.type === 'ping' && statusEl.textContent.startsWith('Queued')) {
-            setStatus(); // we've left the queue and are generating now
-          }
+      let code = 'unknown';
+      try {
+        const body = await res.json();
+        if (body && body.detail && body.detail.code) code = body.detail.code;
+      } catch {}
+      ex.state = STATE.ERROR;
+      ex.errorCode = code;
+      flushNow(ex);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    readLoop: while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      resetSilentTimer();
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        let evt;
+        try {
+          evt = JSON.parse(line);
+        } catch {
+          ex.state = STATE.ERROR;
+          ex.errorCode = 'protocol';
+          flushNow(ex);
+          break readLoop;
         }
-      }
-      if (!gotDone && !errorShown) {
-        assistantDiv.textContent = full ? `${full}\n\n[stream interrupted]` : '[stream interrupted]';
+        if (evt.type === 'content') {
+          ex.state = STATE.GENERATING;
+          // Guarded by firstTokenAt itself, not the state - state already
+          // became GENERATING on the earlier 'generating' event, before
+          // any real token arrived, so it can't be used to detect "is
+          // this the first token" anymore.
+          if (ex.firstTokenAt === null) ex.firstTokenAt = performance.now();
+          ex.buffer += evt.text;
+          ex.tokenCount += 1;
+          markDirty(ex);
+        } else if (evt.type === 'queued') {
+          ex.state = STATE.QUEUED;
+          ex.queuePosition = evt.position;
+          flushNow(ex);
+        } else if (evt.type === 'generating') {
+          // Sent exactly once, the moment a slot is acquired - before any
+          // content/ping. Without handling this explicitly, a queued
+          // client has no way to tell "still queued" from "already
+          // generating, model still loading": pings fire during the
+          // queueing phase too, so both look like a queued event followed
+          // by bare pings. Confirmed live: without this, a genuinely
+          // queued tab stayed stuck showing "Queued" after its turn
+          // actually started.
+          ex.state = STATE.GENERATING;
+          flushNow(ex);
+        } else if (evt.type === 'ping') {
+          // Nothing new to show; the connection is alive either way.
+        } else if (evt.type === 'done') {
+          ex.state = STATE.DONE;
+          ex.doneMeta = evt;
+          flushNow(ex);
+        } else if (evt.type === 'error') {
+          ex.state = STATE.ERROR;
+          ex.errorCode = evt.code;
+          flushNow(ex);
+        }
       }
     }
   } catch (err) {
-    if (err.name === 'AbortError') {
-      // Deliberate user action - keep whatever text arrived so far; only
-      // replace the stale "loading model..." placeholder if nothing did.
-      if (!full) assistantDiv.textContent = '[stopped]';
-    } else {
-      showError(String(err));
+    if (ex.state !== STATE.DONE && ex.state !== STATE.ERROR) {
+      if (ex.controller.signal.aborted && ex.controller.signal.reason === 'client_timeout') {
+        ex.state = STATE.ERROR;
+        ex.errorCode = 'client_timeout';
+      } else if (err && err.name === 'AbortError') {
+        // Deliberate user stop (Stop button / Escape), not the synthetic
+        // timeout abort above. Not an error - keep whatever text arrived;
+        // if nothing arrived yet, mark it stopped via its own flag rather
+        // than borrowing (and mutating) the shared error-code table.
+        ex.state = STATE.DONE;
+        ex.stoppedEarly = !ex.buffer;
+      } else {
+        ex.state = STATE.ERROR;
+        ex.errorCode = 'connection';
+      }
+      flushNow(ex);
     }
   } finally {
-    if (full) {
-      messages.push({ role: 'assistant', content: full });
+    clearTimeout(silentTimer);
+    if (ex.buffer) {
+      conversationMessages.push({ role: 'assistant', content: ex.buffer });
     } else {
-      messages.pop(); // nothing came of this exchange - don't replay it to the model
+      conversationMessages.pop(); // nothing came of this - don't replay it to the model
     }
-    currentController = null;
-    setSending(false);
+    activeExchange = null;
+    setComposerBusy(false);
     refreshLoaded();
+    input.focus();
   }
-});
+}
 </script>
 </body>
 </html>

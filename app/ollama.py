@@ -38,6 +38,29 @@ class OllamaProtocolError(OllamaError):
     """Ollama's response didn't look like valid NDJSON chat output."""
 
 
+class OllamaGenerationError(OllamaError):
+    """Ollama returned 200 and started streaming, then failed mid-generation
+    (e.g. an OOM while loading the model onto the GPU) via an inline
+    {"error": ...} line instead of a chat chunk. Distinct from
+    OllamaHTTPError (a real non-200 response): the request *was* accepted,
+    so this is a different failure mode - and a different thing for a
+    client to do about it - than a rejected request.
+
+    Classifies itself from Ollama's own wording (observed live: "model
+    requires more system memory (24.0 GiB) than is available (16.0 GiB)")
+    into a distinguishable `code` a frontend can act on, rather than the
+    generic upstream_http_200 an OllamaHTTPError would otherwise produce.
+    """
+
+    _OOM_MARKERS = ("out of memory", "requires more system memory", "requires more memory")
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+        lowered = message.lower()
+        self.code = "oom" if any(marker in lowered for marker in self._OOM_MARKERS) else "generation_failed"
+
+
 T = TypeVar("T")
 
 
@@ -178,7 +201,7 @@ class OllamaClient:
                     # (extra fields are ignored) or raise a confusing
                     # ValidationError depending on shape.
                     if isinstance(raw, dict) and "error" in raw:
-                        raise OllamaHTTPError(response.status_code, str(raw["error"]))
+                        raise OllamaGenerationError(str(raw["error"]))
                     try:
                         chunk = OllamaChatChunk.model_validate(raw)
                     except ValidationError as exc:

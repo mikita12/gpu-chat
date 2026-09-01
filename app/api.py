@@ -17,6 +17,7 @@ from app.ollama import (
     OllamaClient,
     OllamaConnectionError,
     OllamaError,
+    OllamaGenerationError,
     OllamaHTTPError,
     OllamaProtocolError,
 )
@@ -26,6 +27,7 @@ from app.schemas import (
     ContentEvent,
     DoneEvent,
     ErrorEvent,
+    GeneratingEvent,
     LoadedResponse,
     PingEvent,
     QueuedEvent,
@@ -58,10 +60,19 @@ def require_auth(request: Request, settings: SettingsDep) -> None:
     expected = f"Bearer {settings.bearer_token}"
     provided = request.headers.get("authorization", "")
     if not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+        raise HTTPException(status_code=401, detail=_detail("unauthorized", "missing or invalid bearer token"))
 
 
 router = APIRouter(dependencies=[Depends(require_auth)])
+
+
+def _detail(code: str, message: str) -> dict[str, str]:
+    """Structured HTTPException.detail - FastAPI serializes any JSON value,
+    not just a string, as {"detail": ...}. Giving every pre-stream error a
+    `code` alongside its message means the frontend never has to string-
+    sniff human-readable text to classify a failure, matching the same
+    typed-code approach already used for in-stream ErrorEvents below."""
+    return {"message": message, "code": code}
 
 
 @router.get("/api/models")
@@ -69,7 +80,7 @@ async def list_models(ollama: OllamaDep) -> list[str]:
     try:
         summaries = await ollama.list_models()
     except OllamaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_detail("upstream_unavailable", str(exc))) from exc
     return sorted(m.name for m in summaries)
 
 
@@ -78,12 +89,14 @@ async def loaded(ollama: OllamaDep, settings: SettingsDep) -> LoadedResponse:
     try:
         running = await ollama.running_models()
     except OllamaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_detail("upstream_unavailable", str(exc))) from exc
     return LoadedResponse(loaded=[m.name for m in running], default=settings.ollama_model)
 
 
 def _error_event(exc: OllamaError) -> ErrorEvent:
     request_id = request_id_var.get()
+    if isinstance(exc, OllamaGenerationError):
+        return ErrorEvent(message=exc.message, code=exc.code, request_id=request_id)
     if isinstance(exc, OllamaHTTPError):
         return ErrorEvent(message=exc.message, code=f"upstream_http_{exc.status_code}", request_id=request_id)
     if isinstance(exc, OllamaConnectionError):
@@ -191,6 +204,12 @@ async def generate_events(
         metrics.QUEUE_DEPTH.set(limiter.queue_depth)
         metrics.ACTIVE_GENERATIONS.inc()
         logger.info("chat request started", extra={"model": model, "message_count": len(messages)})
+        # Distinct from a bare ping: pings fire during the queueing phase
+        # too, so without this a client that was queued can't tell "still
+        # queued, no position change yet" apart from "already generating,
+        # model still loading" - both look like a queued event once
+        # followed by a run of pings.
+        yield GeneratingEvent()
 
         gen_start = time.monotonic()
         ttft_recorded = False
@@ -248,17 +267,24 @@ def _check_limits(req: ChatRequest, settings: Settings) -> None:
     """Hard caps, rejected outright - distinct from _trim_to_context below,
     which adapts history to fit rather than rejecting the request."""
     if not req.messages:
-        raise HTTPException(status_code=400, detail="messages must not be empty")
+        raise HTTPException(status_code=400, detail=_detail("invalid_request", "messages must not be empty"))
     if len(req.messages) > settings.max_messages:
-        raise HTTPException(status_code=400, detail=f"too many messages (max {settings.max_messages})")
+        raise HTTPException(
+            status_code=400,
+            detail=_detail("invalid_request", f"too many messages (max {settings.max_messages})"),
+        )
     for m in req.messages:
         if len(m.content) > settings.max_message_chars:
             raise HTTPException(
-                status_code=400, detail=f"message too long (max {settings.max_message_chars} chars)"
+                status_code=400,
+                detail=_detail("invalid_request", f"message too long (max {settings.max_message_chars} chars)"),
             )
     total_chars = sum(len(m.content) for m in req.messages)
     if total_chars > settings.max_prompt_chars:
-        raise HTTPException(status_code=400, detail=f"prompt too long (max {settings.max_prompt_chars} chars)")
+        raise HTTPException(
+            status_code=400,
+            detail=_detail("invalid_request", f"prompt too long (max {settings.max_prompt_chars} chars)"),
+        )
 
 
 # Rough heuristic - there's no real tokenizer available for arbitrary
@@ -302,9 +328,9 @@ async def chat(req: ChatRequest, ollama: OllamaDep, settings: SettingsDep, limit
     try:
         available = {m.name for m in await ollama.list_models()}
     except OllamaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=_detail("upstream_unavailable", str(exc))) from exc
     if model not in available:
-        raise HTTPException(status_code=400, detail=f"unknown model: {model!r}")
+        raise HTTPException(status_code=400, detail=_detail("unknown_model", f"unknown model: {model!r}"))
 
     messages = req.messages
     context_length = await ollama.context_length(model)
@@ -314,7 +340,9 @@ async def chat(req: ChatRequest, ollama: OllamaDep, settings: SettingsDep, limit
     try:
         ticket = limiter.reserve()
     except QueueFullError as exc:
-        raise HTTPException(status_code=429, detail="server is busy, try again shortly") from exc
+        raise HTTPException(
+            status_code=429, detail=_detail("queue_full", "server is busy, try again shortly")
+        ) from exc
 
     # asyncio.create_task() (inside generate_events/_produce) snapshots the
     # current contextvars.Context at creation time, so setting this here -

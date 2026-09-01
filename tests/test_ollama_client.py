@@ -9,6 +9,7 @@ import respx
 from app.ollama import (
     OllamaClient,
     OllamaConnectionError,
+    OllamaGenerationError,
     OllamaHTTPError,
     OllamaProtocolError,
 )
@@ -114,10 +115,13 @@ async def test_context_length_scans_family_prefixed_key(ollama: OllamaClient) ->
 
 
 @respx.mock
-async def test_chat_mid_stream_error_object_raises_http_error(ollama: OllamaClient) -> None:
-    # Ollama can return 200, stream some content, then hit e.g. an OOM while
+async def test_chat_mid_stream_oom_error_is_classified_as_oom(ollama: OllamaClient) -> None:
+    # Ollama can return 200, stream some content, then hit an OOM while
     # loading the model and emit a bare {"error": ...} line instead of a
-    # chat chunk. This must not leak as a pydantic ValidationError.
+    # chat chunk. This must not leak as a pydantic ValidationError, and must
+    # be distinguishable from other mid-stream failures (code == "oom"),
+    # not the generic/misleading "upstream_http_200" an OllamaHTTPError
+    # would otherwise produce for a request that already got a 200.
     body = (
         '{"message": {"role": "assistant", "content": "Hi"}, "done": false}\n'
         '{"error": "model requires more system memory (24.0 GiB) than is available (16.0 GiB)"}\n'
@@ -126,11 +130,24 @@ async def test_chat_mid_stream_error_object_raises_http_error(ollama: OllamaClie
         return_value=httpx.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
     )
     seen = []
-    with pytest.raises(OllamaHTTPError) as exc_info:
+    with pytest.raises(OllamaGenerationError) as exc_info:
         async for chunk in ollama.chat("qwen3.8:27b", []):
             seen.append(chunk)
     assert len(seen) == 1  # the good line was yielded before the error line
     assert "more system memory" in exc_info.value.message
+    assert exc_info.value.code == "oom"
+
+
+@respx.mock
+async def test_chat_mid_stream_generic_error_is_classified_as_generation_failed(ollama: OllamaClient) -> None:
+    body = '{"error": "an unexpected internal error occurred"}\n'
+    respx.post(f"{BASE_URL}/api/chat").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
+    )
+    with pytest.raises(OllamaGenerationError) as exc_info:
+        async for _ in ollama.chat("qwen3.8:27b", []):
+            pass
+    assert exc_info.value.code == "generation_failed"
 
 
 @respx.mock

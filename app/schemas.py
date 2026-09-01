@@ -34,6 +34,18 @@ class QueuedEvent(BaseModel):
     position: int
 
 
+class GeneratingEvent(BaseModel):
+    """Sent exactly once, the moment a generation slot is actually acquired
+    - before any content/ping. Without this, a client that was queued has
+    no way to distinguish "still queued, no position change yet" from
+    "already generating, model still loading": both look identical from
+    the wire (a queued event once, then a run of bare pings), since pings
+    fire during the queueing phase too. Found live: a genuinely queued
+    client stayed stuck showing "Queued" after its turn actually started."""
+
+    type: Literal["generating"] = "generating"
+
+
 class DoneEvent(BaseModel):
     type: Literal["done"] = "done"
     eval_count: int | None = None
@@ -53,7 +65,7 @@ class ErrorEvent(BaseModel):
 
 
 StreamEvent = Annotated[
-    ContentEvent | PingEvent | QueuedEvent | DoneEvent | ErrorEvent,
+    ContentEvent | PingEvent | QueuedEvent | GeneratingEvent | DoneEvent | ErrorEvent,
     Field(discriminator="type"),
 ]
 

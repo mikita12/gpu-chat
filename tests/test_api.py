@@ -10,13 +10,15 @@ from app import metrics
 from app.api import _produce, generate_events, router
 from app.config import get_settings
 from app.limiter import GenerationLimiter
-from app.ollama import OllamaConnectionError, OllamaHTTPError
+from app.ollama import OllamaConnectionError, OllamaGenerationError, OllamaHTTPError
 from app.schemas import (
     ContentEvent,
     DoneEvent,
     ErrorEvent,
+    GeneratingEvent,
     OllamaChatChunk,
     OllamaChatMessageChunk,
+    PingEvent,
     QueuedEvent,
     StreamEvent,
 )
@@ -53,7 +55,8 @@ async def test_chat_streams_content_then_done() -> None:
         async with client.stream("POST", "/api/chat", json=payload) as resp:
             assert resp.status_code == 200
             lines = [line async for line in resp.aiter_lines() if line]
-    assert '"type":"content"' in lines[0]
+    assert '"type":"generating"' in lines[0]
+    assert any('"type":"content"' in line for line in lines)
     assert '"type":"done"' in lines[-1]
 
 
@@ -67,6 +70,7 @@ async def test_chat_unknown_model_returns_400() -> None:
             json={"messages": [{"role": "user", "content": "hi"}], "model": "ghost"},
         )
     assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "unknown_model"
 
 
 async def test_generate_events_maps_upstream_http_error() -> None:
@@ -76,6 +80,15 @@ async def test_generate_events_maps_upstream_http_error() -> None:
     events = [e async for e in generate_events(fake, "ghost", [], fast_settings(), limiter, ticket)]  # type: ignore[arg-type]
     assert isinstance(events[-1], ErrorEvent)
     assert events[-1].code == "upstream_http_404"
+
+
+async def test_generate_events_maps_generation_error_to_its_own_code() -> None:
+    fake = FakeOllamaClient(chat_error=OllamaGenerationError("model requires more system memory (1 GiB)"))
+    limiter = GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    ticket = limiter.reserve()
+    events = [e async for e in generate_events(fake, "m", [], fast_settings(), limiter, ticket)]  # type: ignore[arg-type]
+    assert isinstance(events[-1], ErrorEvent)
+    assert events[-1].code == "oom"
 
 
 async def test_generate_events_maps_connection_error() -> None:
@@ -113,7 +126,9 @@ async def test_mid_stream_disconnect_cancels_and_frees_producer() -> None:
     await asyncio.sleep(0)  # let the (uncontended) permit acquire settle first
     agen = generate_events(fake, "m", [], settings, limiter, ticket)  # type: ignore[arg-type]
     first = await agen.__anext__()
-    assert isinstance(first, type(first))  # got at least one (a ping) event
+    assert isinstance(first, GeneratingEvent)  # slot acquired, _produce not started yet
+    second = await agen.__anext__()
+    assert isinstance(second, PingEvent)  # _produce's task now exists and has called chat()
     await agen.aclose()  # simulates the client disconnecting mid-stream
     await asyncio.sleep(0.05)
     assert fake.cancelled is True
@@ -163,8 +178,31 @@ async def test_second_request_sees_queued_position_while_first_runs() -> None:
     queued = [e for e in events2 if isinstance(e, QueuedEvent)]
     assert queued and queued[0].position == 1
     assert any(isinstance(e, ContentEvent) for e in events2)
+    # The transition out of the queue must be visible as its own event, not
+    # just inferred from a bare ping - a ping fires during the queueing
+    # phase too (see next test), so a client that was queued has no way to
+    # tell "still queued" from "already generating, model still loading"
+    # without this. Regression test for a real bug caught in live testing:
+    # a genuinely queued browser tab stayed stuck showing "Queued" forever
+    # after its turn had actually started.
+    generating_idx = next(i for i, e in enumerate(events2) if isinstance(e, GeneratingEvent))
+    content_idx = next(i for i, e in enumerate(events2) if isinstance(e, ContentEvent))
+    last_queued_idx = max(i for i, e in enumerate(events2) if isinstance(e, QueuedEvent))
+    assert last_queued_idx < generating_idx < content_idx
 
     await task1
+
+
+async def test_generating_event_precedes_content_even_when_acquired_immediately() -> None:
+    # No contention at all (uncontended reservation) - still must not go
+    # straight from nothing to content without announcing the state change.
+    fake = FakeOllamaClient(chunks=[OllamaChatChunk(message=OllamaChatMessageChunk(content="hi"), done=True)])
+    limiter = GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    ticket = limiter.reserve()
+    await asyncio.sleep(0)  # let the (uncontended) permit acquire settle first
+    events = [e async for e in generate_events(fake, "m", [], fast_settings(), limiter, ticket)]  # type: ignore[arg-type]
+    assert isinstance(events[0], GeneratingEvent)
+    assert any(isinstance(e, ContentEvent) for e in events)
 
 
 async def test_cancel_mid_generation_releases_permit_for_next_request() -> None:
@@ -200,6 +238,7 @@ async def test_queue_full_returns_429_without_streaming() -> None:
 
         resp3 = await client.post("/api/chat", json=payload)
         assert resp3.status_code == 429
+        assert resp3.json()["detail"]["code"] == "queue_full"
 
         for task in (task1, task2):
             task.cancel()
@@ -223,6 +262,7 @@ async def test_bearer_token_configured_rejects_missing_header() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/api/loaded")
     assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "unauthorized"
 
 
 async def test_bearer_token_configured_rejects_wrong_token() -> None:
@@ -251,6 +291,7 @@ async def test_chat_rejects_too_many_messages_with_400() -> None:
         payload = {"messages": [{"role": "user", "content": "hi"}] * 1000, "model": "test-model"}
         resp = await client.post("/api/chat", json=payload)
     assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "invalid_request"
 
 
 async def test_chat_trims_history_to_context_window() -> None:
