@@ -125,11 +125,19 @@ form.addEventListener('submit', async (e) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, model: modelSelect.value }),
     });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch {}
+      assistantDiv.textContent = `[error: ${detail}]`;
+      messages.pop();
+      refreshLoaded();
+      return;
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let full = '';
-    let sawContent = false;
+    let sawOutput = false;
     assistantDiv.textContent = 'loading model…';
     while (true) {
       const { done, value } = await reader.read();
@@ -142,15 +150,18 @@ form.addEventListener('submit', async (e) => {
         if (!line) continue;
         const evt = JSON.parse(line);
         if (evt.type === 'content') {
-          sawContent = true;
+          sawOutput = true;
           full += evt.text;
           assistantDiv.textContent = full;
           chatEl.scrollTop = chatEl.scrollHeight;
+        } else if (evt.type === 'error') {
+          sawOutput = true;
+          assistantDiv.textContent = full ? `${full}\n\n[error: ${evt.message}]` : `[error: ${evt.message}]`;
         }
-        // 'ping' events keep the connection alive while a model loads; ignore them.
+        // 'ping'/'done'/'queued' events don't need to change the displayed text.
       }
     }
-    if (!sawContent) assistantDiv.textContent = '';
+    if (!sawOutput) assistantDiv.textContent = '';
     messages.push({ role: 'assistant', content: full });
     refreshLoaded();
   } catch (err) {

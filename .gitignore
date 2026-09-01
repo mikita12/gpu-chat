@@ -1,3 +1,8 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+# Laptop-only tunnel glue for the temporary laptop-hosted deployment; not
+# needed once this runs on giga2 directly (no SSH tunnel to itself).
+tunnel-watchdog.sh

@@ -1,0 +1,111 @@
+from collections.abc import AsyncIterator
+
+import httpx
+import pytest
+import respx
+
+from app.ollama import (
+    OllamaClient,
+    OllamaConnectionError,
+    OllamaHTTPError,
+    OllamaProtocolError,
+)
+
+BASE_URL = "http://ollama.test"
+
+
+@pytest.fixture
+async def ollama() -> AsyncIterator[OllamaClient]:
+    async with httpx.AsyncClient() as client:
+        yield OllamaClient(BASE_URL, client)
+
+
+@respx.mock
+async def test_list_models_success(ollama: OllamaClient) -> None:
+    respx.get(f"{BASE_URL}/api/tags").mock(
+        return_value=httpx.Response(200, json={"models": [{"name": "qwen3.8:27b", "size": 1}]})
+    )
+    models = await ollama.list_models()
+    assert [m.name for m in models] == ["qwen3.8:27b"]
+
+
+@respx.mock
+async def test_list_models_http_error(ollama: OllamaClient) -> None:
+    respx.get(f"{BASE_URL}/api/tags").mock(
+        return_value=httpx.Response(500, json={"error": "internal error"})
+    )
+    with pytest.raises(OllamaHTTPError) as exc_info:
+        await ollama.list_models()
+    assert exc_info.value.status_code == 500
+    assert "internal error" in exc_info.value.message
+
+
+@respx.mock
+async def test_list_models_connection_refused(ollama: OllamaClient) -> None:
+    respx.get(f"{BASE_URL}/api/tags").mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(OllamaConnectionError):
+        await ollama.list_models()
+
+
+@respx.mock
+async def test_chat_success_yields_content_then_done(ollama: OllamaClient) -> None:
+    body = (
+        '{"message": {"role": "assistant", "content": "Hi"}, "done": false}\n'
+        '{"message": {"role": "assistant", "content": "!"}, "done": false}\n'
+        '{"message": {"role": "assistant", "content": ""}, "done": true, '
+        '"eval_count": 2, "eval_duration": 1000000}\n'
+    )
+    respx.post(f"{BASE_URL}/api/chat").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
+    )
+    chunks = [c async for c in ollama.chat("qwen3.8:27b", [])]
+    assert [c.message.content for c in chunks] == ["Hi", "!", ""]
+    assert chunks[-1].done is True
+    assert chunks[-1].eval_count == 2
+
+
+@respx.mock
+async def test_chat_upstream_404_raises_before_yielding(ollama: OllamaClient) -> None:
+    respx.post(f"{BASE_URL}/api/chat").mock(
+        return_value=httpx.Response(404, json={"error": "model 'ghost' not found"})
+    )
+    with pytest.raises(OllamaHTTPError) as exc_info:
+        async for _ in ollama.chat("ghost", []):
+            pass
+    assert exc_info.value.status_code == 404
+    assert "not found" in exc_info.value.message
+
+
+@respx.mock
+async def test_chat_connection_refused(ollama: OllamaClient) -> None:
+    respx.post(f"{BASE_URL}/api/chat").mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(OllamaConnectionError):
+        async for _ in ollama.chat("qwen3.8:27b", []):
+            pass
+
+
+@respx.mock
+async def test_chat_malformed_line_raises_protocol_error(ollama: OllamaClient) -> None:
+    body = '{"message": {"role": "assistant", "content": "ok"}, "done": false}\nnot json at all\n'
+    respx.post(f"{BASE_URL}/api/chat").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
+    )
+    seen = []
+    with pytest.raises(OllamaProtocolError):
+        async for chunk in ollama.chat("qwen3.8:27b", []):
+            seen.append(chunk)
+    assert len(seen) == 1  # the valid line was yielded before the bad one blew up
+
+
+@respx.mock
+async def test_context_length_scans_family_prefixed_key(ollama: OllamaClient) -> None:
+    respx.post(f"{BASE_URL}/api/show").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "details": {"family": "qwen35"},
+                "model_info": {"qwen35.context_length": 262144, "qwen35.embedding_length": 2048},
+            },
+        )
+    )
+    assert await ollama.context_length("qwen3.8:27b") == 262144
