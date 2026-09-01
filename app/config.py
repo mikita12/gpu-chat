@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     max_messages: int = 50
     max_message_chars: int = 8_000
     max_prompt_chars: int = 24_000
-    rate_limit_per_minute: int = 30
 
     # Auth (Phase 4). Empty string (default) means auth is disabled - anyone
     # can use the API, matching today's zero-friction LAN behaviour. Setting

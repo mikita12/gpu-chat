@@ -77,9 +77,50 @@ enabled. `install.sh` will tell you if this is needed; a machine admin runs:
 sudo loginctl enable-linger <your-username>
 ```
 
+## Configuration
+
+Env vars, set in `systemd/gpu-chat.service` (or passed directly when
+running `uvicorn` by hand). All have sane defaults - nothing here is
+required.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Where Ollama is reachable |
+| `OLLAMA_MODEL` | `qwen3.8:27b` | Default model when a request doesn't specify one |
+| `OLLAMA_CACHE_TTL_SECONDS` | `5.0` | How long `/api/tags`/`/api/show` responses are cached |
+| `HEARTBEAT_SECONDS` | `10.0` | How often to ping an otherwise-idle stream |
+| `STALL_TIMEOUT_SECONDS` | `90.0` | Give up if Ollama produces nothing for this long once generating |
+| `MAX_CONCURRENT_GENERATIONS` | `1` | How many chats run against the GPU at once |
+| `MAX_QUEUE_SIZE` | `10` | How many more requests may *wait* beyond that before getting HTTP 429 |
+| `MAX_MESSAGES` | `50` | Reject a request with more messages than this |
+| `MAX_MESSAGE_CHARS` | `8000` | Reject a request with any single message longer than this |
+| `MAX_PROMPT_CHARS` | `24000` | Reject a request whose messages sum to more than this |
+| `BEARER_TOKEN` | *(unset)* | See below |
+
+Message history longer than the selected model's actual context window is
+trimmed automatically (oldest non-system messages dropped first, using a
+rough chars-per-token estimate - there's no real tokenizer for arbitrary
+Ollama models) - that's separate from `MAX_MESSAGES`/`MAX_MESSAGE_CHARS`/
+`MAX_PROMPT_CHARS` above, which are hard rejects rather than trimming.
+
 ## Security note
 
-This has **no authentication** — anyone who can reach port 8000 on the LAN
-can prompt the model. Fine for a trusted home/office network; do not expose
-this port beyond the LAN (e.g. via port-forwarding on a router) without
-adding auth in front of it.
+By default this has **no authentication** — anyone who can reach port 8000
+on the LAN can prompt the model. Fine for a trusted home/office network; do
+not expose this port beyond the LAN (e.g. via port-forwarding on a router)
+without adding auth in front of it.
+
+Setting `BEARER_TOKEN` turns on auth for `/api/models`, `/api/loaded`, and
+`/api/chat` (not the static page itself) - callers must send
+`Authorization: Bearer <token>`, e.g.:
+
+```bash
+curl http://<host>:8000/api/chat -H "Authorization: Bearer <token>" ...
+```
+
+**Note:** `app/static/index.html` has no way to enter or send a token - if
+you set `BEARER_TOKEN`, the browser UI itself will get 401s unless you put
+something in front of it that injects the header (a reverse proxy, a
+browser extension, etc.). This is meant for protecting the API from
+scripts/automation on a less-trusted network, not for gating the browser
+chat UI on today's trusted-LAN deployment.

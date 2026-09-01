@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hmac
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Annotated
@@ -28,9 +29,6 @@ from app.schemas import (
     StreamEvent,
 )
 
-router = APIRouter()
-
-
 def get_ollama_client(request: Request) -> OllamaClient:
     ollama: OllamaClient = request.app.state.ollama
     return ollama
@@ -44,6 +42,22 @@ def get_limiter(request: Request) -> GenerationLimiter:
 OllamaDep = Annotated[OllamaClient, Depends(get_ollama_client)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 LimiterDep = Annotated[GenerationLimiter, Depends(get_limiter)]
+
+
+def require_auth(request: Request, settings: SettingsDep) -> None:
+    """No-op when settings.bearer_token is unset (the default) - preserves
+    today's zero-friction LAN access. Otherwise requires a matching
+    `Authorization: Bearer <token>` header, compared with hmac.compare_digest
+    (constant-time) rather than `==` to avoid a timing side-channel."""
+    if not settings.bearer_token:
+        return
+    expected = f"Bearer {settings.bearer_token}"
+    provided = request.headers.get("authorization", "")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+
+
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.get("/api/models")
@@ -196,8 +210,60 @@ async def generate_events(
         await limiter.release(ticket, acquired)
 
 
+def _check_limits(req: ChatRequest, settings: Settings) -> None:
+    """Hard caps, rejected outright - distinct from _trim_to_context below,
+    which adapts history to fit rather than rejecting the request."""
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="messages must not be empty")
+    if len(req.messages) > settings.max_messages:
+        raise HTTPException(status_code=400, detail=f"too many messages (max {settings.max_messages})")
+    for m in req.messages:
+        if len(m.content) > settings.max_message_chars:
+            raise HTTPException(
+                status_code=400, detail=f"message too long (max {settings.max_message_chars} chars)"
+            )
+    total_chars = sum(len(m.content) for m in req.messages)
+    if total_chars > settings.max_prompt_chars:
+        raise HTTPException(status_code=400, detail=f"prompt too long (max {settings.max_prompt_chars} chars)")
+
+
+# Rough heuristic - there's no real tokenizer available for arbitrary
+# Ollama models, so this deliberately errs conservative (trims a bit more
+# than strictly necessary) rather than trying to be precise.
+CHARS_PER_TOKEN_ESTIMATE = 4
+RESPONSE_TOKEN_RESERVE = 1024
+
+
+def _trim_to_context(messages: list[ChatMessage], context_length: int) -> list[ChatMessage]:
+    """Keeps all system messages, then as many of the most recent remaining
+    messages as fit in the model's context window (minus headroom for its
+    own reply), dropping older ones first. Always keeps at least the single
+    most recent non-system message, even if it alone exceeds budget - never
+    returns an empty conversation. This adapts history to fit rather than
+    rejecting the request (see _check_limits for the hard-reject caps)."""
+    # If the reserve would eat the whole (tiny) context window, fall back
+    # to using the full window as budget rather than trimming to nothing.
+    budget = context_length - RESPONSE_TOKEN_RESERVE
+    if budget <= 0:
+        budget = context_length
+    system = [m for m in messages if m.role == "system"]
+    rest = [m for m in messages if m.role != "system"]
+
+    used = sum(len(m.content) for m in system) // CHARS_PER_TOKEN_ESTIMATE
+    kept: list[ChatMessage] = []
+    for m in reversed(rest):
+        cost = len(m.content) // CHARS_PER_TOKEN_ESTIMATE
+        if kept and used + cost > budget:
+            break
+        used += cost
+        kept.append(m)
+    kept.reverse()
+    return system + kept
+
+
 @router.post("/api/chat")
 async def chat(req: ChatRequest, ollama: OllamaDep, settings: SettingsDep, limiter: LimiterDep) -> StreamingResponse:
+    _check_limits(req, settings)
     model = req.model or settings.ollama_model
     try:
         available = {m.name for m in await ollama.list_models()}
@@ -205,13 +271,19 @@ async def chat(req: ChatRequest, ollama: OllamaDep, settings: SettingsDep, limit
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if model not in available:
         raise HTTPException(status_code=400, detail=f"unknown model: {model!r}")
+
+    messages = req.messages
+    context_length = await ollama.context_length(model)
+    if context_length is not None:
+        messages = _trim_to_context(messages, context_length)
+
     try:
         ticket = limiter.reserve()
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail="server is busy, try again shortly") from exc
 
     async def stream() -> AsyncIterator[bytes]:
-        async for event in generate_events(ollama, model, req.messages, settings, limiter, ticket):
+        async for event in generate_events(ollama, model, messages, settings, limiter, ticket):
             yield event.model_dump_json().encode() + b"\n"
 
     return StreamingResponse(

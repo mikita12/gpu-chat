@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.api import _produce, generate_events, router
+from app.config import get_settings
 from app.limiter import GenerationLimiter
 from app.ollama import OllamaConnectionError, OllamaHTTPError
 from app.schemas import (
@@ -22,11 +23,18 @@ from app.schemas import (
 from .helpers import FakeOllamaClient, fast_settings
 
 
-def make_app(ollama: FakeOllamaClient, limiter: GenerationLimiter | None = None) -> FastAPI:
+def make_app(
+    ollama: FakeOllamaClient, limiter: GenerationLimiter | None = None, bearer_token: str = ""
+) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.state.ollama = ollama
     app.state.limiter = limiter or GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    if bearer_token:
+        settings = get_settings()
+        app.dependency_overrides[get_settings] = lambda: settings.model_copy(
+            update={"bearer_token": bearer_token}
+        )
     return app
 
 
@@ -196,6 +204,78 @@ async def test_queue_full_returns_429_without_streaming() -> None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, httpx.RequestError):
                 await task
+
+
+async def test_no_bearer_token_configured_requires_no_header() -> None:
+    fake = FakeOllamaClient()
+    app = make_app(fake)  # bearer_token left unset - today's default
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/loaded")
+    assert resp.status_code == 200
+
+
+async def test_bearer_token_configured_rejects_missing_header() -> None:
+    fake = FakeOllamaClient()
+    app = make_app(fake, bearer_token="secret")
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/loaded")
+    assert resp.status_code == 401
+
+
+async def test_bearer_token_configured_rejects_wrong_token() -> None:
+    fake = FakeOllamaClient()
+    app = make_app(fake, bearer_token="secret")
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/loaded", headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401
+
+
+async def test_bearer_token_configured_accepts_correct_token() -> None:
+    fake = FakeOllamaClient()
+    app = make_app(fake, bearer_token="secret")
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/loaded", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+
+
+async def test_chat_rejects_too_many_messages_with_400() -> None:
+    fake = FakeOllamaClient()
+    app = make_app(fake)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {"messages": [{"role": "user", "content": "hi"}] * 1000, "model": "test-model"}
+        resp = await client.post("/api/chat", json=payload)
+    assert resp.status_code == 400
+
+
+async def test_chat_trims_history_to_context_window() -> None:
+    fake = FakeOllamaClient(
+        chunks=[OllamaChatChunk(message=OllamaChatMessageChunk(content="ok"), done=True)],
+        # reserve (1024) dwarfs this, so budget falls back to context_length
+        # itself: 15 *tokens*. Each 40-char message costs 40//4=10 tokens,
+        # so only the single most recent one fits (10 <= 15, two would be 20).
+        context_length_value=15,
+    )
+    app = make_app(fake)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "messages": [
+                {"role": "user", "content": "x" * 40},
+                {"role": "assistant", "content": "x" * 40},
+                {"role": "user", "content": "x" * 40},
+            ],
+            "model": "test-model",
+        }
+        resp = await client.post("/api/chat", json=payload)
+    assert resp.status_code == 200
+    assert fake.last_chat_messages is not None
+    assert len(fake.last_chat_messages) < 3
+    assert fake.last_chat_messages[-1].content == "x" * 40
 
 
 async def _collect(agen: object) -> list[StreamEvent]:

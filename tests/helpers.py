@@ -18,8 +18,10 @@ class FakeOllamaClient:
     running: list[OllamaRunningModel] = field(default_factory=list)
     chat_error: OllamaError | None = None
     hang_seconds: float | None = None
+    context_length_value: int | None = None
     cancelled: bool = False
     closed: bool = False
+    last_chat_messages: list[ChatMessage] | None = None
 
     async def list_models(self) -> list[OllamaModelSummary]:
         return self.models
@@ -27,7 +29,11 @@ class FakeOllamaClient:
     async def running_models(self) -> list[OllamaRunningModel]:
         return self.running
 
+    async def context_length(self, model: str) -> int | None:
+        return self.context_length_value
+
     async def chat(self, model: str, messages: list[ChatMessage]) -> AsyncIterator[OllamaChatChunk]:
+        self.last_chat_messages = messages
         try:
             if self.hang_seconds is not None:
                 await asyncio.sleep(self.hang_seconds)
