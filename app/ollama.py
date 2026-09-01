@@ -1,8 +1,10 @@
 import json
-from collections.abc import AsyncIterator
-from typing import Any
+import time
+from collections.abc import AsyncGenerator
+from typing import Any, Generic, TypeVar
 
 import httpx
+from pydantic import ValidationError
 
 from app.schemas import (
     ChatMessage,
@@ -36,6 +38,43 @@ class OllamaProtocolError(OllamaError):
     """Ollama's response didn't look like valid NDJSON chat output."""
 
 
+T = TypeVar("T")
+
+
+class _CacheMiss:
+    """Sentinel distinct from None, so a cached None value is still a hit."""
+
+    __slots__ = ()
+
+
+_MISS = _CacheMiss()
+
+
+class _TTLCache(Generic[T]):
+    """A tiny fixed-TTL cache. Not thread-safe; fine for a single-process
+    asyncio app with one event loop."""
+
+    def __init__(self, ttl_seconds: float) -> None:
+        self._ttl = ttl_seconds
+        self._store: dict[object, tuple[float, T]] = {}
+
+    def get(self, key: object) -> T | _CacheMiss:
+        entry = self._store.get(key)
+        if entry is None:
+            return _MISS
+        expires_at, value = entry
+        if time.monotonic() >= expires_at:
+            del self._store[key]
+            return _MISS
+        return value
+
+    def set(self, key: object, value: T) -> None:
+        self._store[key] = (time.monotonic() + self._ttl, value)
+
+    def invalidate(self) -> None:
+        self._store.clear()
+
+
 def _extract_error(body: bytes) -> str:
     try:
         data = json.loads(body)
@@ -55,20 +94,37 @@ class OllamaClient:
     errors instead of returning empty/partial data on failure.
     """
 
-    def __init__(self, base_url: str, client: httpx.AsyncClient) -> None:
+    def __init__(self, base_url: str, client: httpx.AsyncClient, cache_ttl_seconds: float = 5.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._client = client
+        self._models_cache: _TTLCache[list[OllamaModelSummary]] = _TTLCache(cache_ttl_seconds)
+        self._context_length_cache: _TTLCache[int | None] = _TTLCache(cache_ttl_seconds)
+
+    def invalidate_cache(self) -> None:
+        """Explicit invalidation hook - nothing calls this yet, but later
+        phases (e.g. after a model finishes loading/unloading) will want to
+        force a fresh read instead of waiting out the TTL."""
+        self._models_cache.invalidate()
+        self._context_length_cache.invalidate()
 
     async def list_models(self) -> list[OllamaModelSummary]:
+        cached = self._models_cache.get("models")
+        if not isinstance(cached, _CacheMiss):
+            return cached
         data = await self._get_json("/api/tags")
-        return OllamaTagsResponse.model_validate(data).models
+        models = OllamaTagsResponse.model_validate(data).models
+        self._models_cache.set("models", models)
+        return models
 
     async def running_models(self) -> list[OllamaRunningModel]:
         data = await self._get_json("/api/ps")
         return OllamaPsResponse.model_validate(data).models
 
     async def show_model(self, name: str) -> OllamaShowResponse:
-        data = await self._post_json("/api/show", {"name": name})
+        # Send both keys: older Ollama versions expect "name", newer ones
+        # "model" - verified both are accepted by the current live version,
+        # so sending both is forward-compatible with no downside.
+        data = await self._post_json("/api/show", {"model": name, "name": name})
         return OllamaShowResponse.model_validate(data)
 
     async def context_length(self, name: str) -> int | None:
@@ -78,15 +134,21 @@ class OllamaClient:
         model_info, e.g. "qwen35.context_length" - the key name varies by
         model architecture, so we scan for the suffix rather than assume one.
         """
+        cached = self._context_length_cache.get(name)
+        if not isinstance(cached, _CacheMiss):
+            return cached
         show = await self.show_model(name)
+        result: int | None = None
         for key, value in show.model_info.items():
             if key.endswith(".context_length") and isinstance(value, int):
-                return value
-        return None
+                result = value
+                break
+        self._context_length_cache.set(name, result)
+        return result
 
     async def chat(
         self, model: str, messages: list[ChatMessage]
-    ) -> AsyncIterator[OllamaChatChunk]:
+    ) -> AsyncGenerator[OllamaChatChunk, None]:
         payload = {
             "model": model,
             "messages": [m.model_dump() for m in messages],
@@ -108,7 +170,22 @@ class OllamaClient:
                         raise OllamaProtocolError(
                             f"malformed line from Ollama: {line!r}"
                         ) from exc
-                    yield OllamaChatChunk.model_validate(raw)
+                    # Ollama can return 200 and start streaming, then hit a
+                    # failure mid-generation (e.g. an OOM while loading the
+                    # model onto the GPU) and emit a bare {"error": ...}
+                    # line instead of a chat chunk. Must be checked before
+                    # model_validate(), which would otherwise either drop it
+                    # (extra fields are ignored) or raise a confusing
+                    # ValidationError depending on shape.
+                    if isinstance(raw, dict) and "error" in raw:
+                        raise OllamaHTTPError(response.status_code, str(raw["error"]))
+                    try:
+                        chunk = OllamaChatChunk.model_validate(raw)
+                    except ValidationError as exc:
+                        raise OllamaProtocolError(
+                            f"unexpected chat chunk shape from Ollama: {raw!r}"
+                        ) from exc
+                    yield chunk
         except httpx.TransportError as exc:
             raise OllamaConnectionError(str(exc)) from exc
 

@@ -76,24 +76,44 @@ async def _produce(
     always pushes a final None sentinel, even on error - the consumer relies
     on that to know when to stop rather than ever waiting forever."""
     try:
-        async for chunk in ollama.chat(model, messages):
-            if chunk.message.content:
-                await queue.put(ContentEvent(text=chunk.message.content))
-            if chunk.done:
-                await queue.put(
-                    DoneEvent(
-                        eval_count=chunk.eval_count,
-                        eval_duration=chunk.eval_duration,
-                        prompt_eval_count=chunk.prompt_eval_count,
-                        prompt_eval_duration=chunk.prompt_eval_duration,
-                        load_duration=chunk.load_duration,
-                        total_duration=chunk.total_duration,
+        # aclosing() guarantees .aclose() runs on this generator - in this
+        # same task - on every exit from the block below, including this
+        # task being cancelled while blocked on queue.put() (the bounded
+        # queue can legitimately block there). Without it, an abandoned
+        # generator still holding chat()'s open `async with client.stream()`
+        # only gets finalized later by the event loop's async-generator GC
+        # hook, in a *different* task than the one that opened the stream -
+        # which is exactly httpx/anyio's "cannot exit cancel scope in a
+        # different task" failure, and can leak the upstream connection.
+        async with contextlib.aclosing(ollama.chat(model, messages)) as stream:
+            async for chunk in stream:
+                if chunk.message.content:
+                    await queue.put(ContentEvent(text=chunk.message.content))
+                if chunk.done:
+                    await queue.put(
+                        DoneEvent(
+                            eval_count=chunk.eval_count,
+                            eval_duration=chunk.eval_duration,
+                            prompt_eval_count=chunk.prompt_eval_count,
+                            prompt_eval_duration=chunk.prompt_eval_duration,
+                            load_duration=chunk.load_duration,
+                            total_duration=chunk.total_duration,
+                        )
                     )
-                )
     except OllamaError as exc:
         await queue.put(_error_event(exc))
     finally:
-        await queue.put(None)
+        # Best-effort, non-blocking: during a cancellation-driven teardown
+        # (the consumer stopped calling queue.get() because *it* is the one
+        # shutting things down, e.g. generate_events()'s finally block
+        # cancelling us) the queue can be full with nobody left to drain it.
+        # A blocking `await queue.put(None)` here would deadlock - a fresh
+        # await entered while already unwinding a CancelledError does not
+        # get cancelled again on its own. The sentinel only matters to a
+        # consumer that's still actively reading; one that isn't doesn't
+        # need it.
+        with contextlib.suppress(asyncio.QueueFull):
+            queue.put_nowait(None)
 
 
 async def generate_events(

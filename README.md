@@ -14,6 +14,28 @@ prompt it — no SSH tunnel needed.
   `OLLAMA_URL` env var) and uses the `qwen3.8:27b` model by default (override
   with `OLLAMA_MODEL`) — both are set in `systemd/gpu-chat.service`.
 
+## Stream event protocol
+
+`POST /api/chat` responds with `application/x-ndjson`: one JSON object per
+line, each with a `type` field. This is the contract between
+`app/api.py` (backend, emits these) and `app/static/index.html` (frontend,
+must handle them) - keeping both sides in sync here is the point of writing
+it down.
+
+| type | fields | backend guarantees | frontend must do |
+|---|---|---|---|
+| `content` | `text: string` | one per generated token/chunk, in order | append `text` to the displayed reply |
+| `ping` | - | sent every `HEARTBEAT_SECONDS` (default 10s) while otherwise idle (e.g. during model load), purely to keep the connection alive | safe to ignore for content purposes; may use it to detect "still working" |
+| `queued` | `position: number` | *(not yet emitted - Phase 3)* will be sent while a request waits for a free generation slot | show `position` in the status line; expect more `content`/`ping` once generation actually starts |
+| `done` | `eval_count`, `eval_duration`, `prompt_eval_count`, `prompt_eval_duration`, `load_duration`, `total_duration` (all nanoseconds except counts, all nullable) | sent exactly once, last, on a clean finish - and *only* then | treat its absence as a truncated/interrupted stream, not a clean end; the timing fields are for diagnostics (currently just logged to the console) |
+| `error` | `message: string`, `code: string` | sent on any failure (upstream HTTP error, connection failure, malformed/unexpected data from Ollama, or a stall with no progress for `STALL_TIMEOUT_SECONDS`) - always terminates the stream | show `message`; do not treat the exchange as successful |
+
+Example line: `{"type":"content","text":"Hello"}`
+
+A stream that ends without ever sending `done` or `error` (connection just
+dropped) must be treated by the frontend as interrupted - that's what the
+`[stream interrupted]` marker in `index.html` is for.
+
 ## Install (run once, on giga2)
 
 ```bash

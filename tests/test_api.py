@@ -1,13 +1,21 @@
 import asyncio
+import contextlib
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.api import generate_events, router
+from app.api import _produce, generate_events, router
 from app.ollama import OllamaConnectionError, OllamaHTTPError
-from app.schemas import ContentEvent, DoneEvent, ErrorEvent, OllamaChatChunk, OllamaChatMessageChunk
+from app.schemas import (
+    ContentEvent,
+    DoneEvent,
+    ErrorEvent,
+    OllamaChatChunk,
+    OllamaChatMessageChunk,
+    StreamEvent,
+)
 
 from .helpers import FakeOllamaClient, fast_settings
 
@@ -88,6 +96,31 @@ async def test_mid_stream_disconnect_cancels_and_frees_producer() -> None:
     await agen.aclose()  # simulates the client disconnecting mid-stream
     await asyncio.sleep(0.05)
     assert fake.cancelled is True
+
+
+async def test_producer_cancelled_while_blocked_on_full_queue_closes_ollama_stream() -> None:
+    # Regression test for the "cannot exit cancel scope in a different task"
+    # class of bug: _produce() must use contextlib.aclosing() around the
+    # ollama.chat() generator, not a bare `async for`, so a cancellation that
+    # lands while blocked on a full queue.put() (not inside chat()'s own
+    # await) still tears the generator down deterministically in this task.
+    fake = FakeOllamaClient(
+        chunks=[
+            OllamaChatChunk(message=OllamaChatMessageChunk(content="one")),
+            OllamaChatChunk(message=OllamaChatMessageChunk(content="two")),
+        ]
+    )
+    queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue(maxsize=1)
+    await queue.put(ContentEvent(text="filler"))  # first real put() will block
+
+    task = asyncio.create_task(_produce(fake, "m", [], queue))  # type: ignore[arg-type]
+    await asyncio.sleep(0.05)  # let _produce reach the blocked queue.put()
+    assert not task.done()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert fake.closed is True
 
 
 async def _collect(agen: object) -> list[ContentEvent | DoneEvent | ErrorEvent]:

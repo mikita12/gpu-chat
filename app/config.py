@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     # Assume Ollama runs on the same machine as this app by default.
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.8:27b"
+    ollama_cache_ttl_seconds: float = 5.0
 
     # Streaming behaviour (app/api.py).
     heartbeat_seconds: float = 10.0

@@ -20,7 +20,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # per-request httpx.AsyncClient means a new connection pool (and no
     # keep-alive reuse) on every single chat message.
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)) as client:
-        app.state.ollama = OllamaClient(settings.ollama_url, client)
+        app.state.ollama = OllamaClient(
+            settings.ollama_url, client, cache_ttl_seconds=settings.ollama_cache_ttl_seconds
+        )
         yield
 
 

@@ -19,6 +19,7 @@ class FakeOllamaClient:
     chat_error: OllamaError | None = None
     hang_seconds: float | None = None
     cancelled: bool = False
+    closed: bool = False
 
     async def list_models(self) -> list[OllamaModelSummary]:
         return self.models
@@ -38,6 +39,11 @@ class FakeOllamaClient:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+        finally:
+            # Set regardless of how we got here (normal completion,
+            # CancelledError, or GeneratorExit from an explicit aclose()) -
+            # proves the generator was actually torn down, not abandoned.
+            self.closed = True
 
 
 def fast_settings(**overrides: object) -> Settings:

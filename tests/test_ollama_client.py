@@ -1,3 +1,5 @@
+import asyncio
+import json
 from collections.abc import AsyncIterator
 
 import httpx
@@ -109,3 +111,84 @@ async def test_context_length_scans_family_prefixed_key(ollama: OllamaClient) ->
         )
     )
     assert await ollama.context_length("qwen3.8:27b") == 262144
+
+
+@respx.mock
+async def test_chat_mid_stream_error_object_raises_http_error(ollama: OllamaClient) -> None:
+    # Ollama can return 200, stream some content, then hit e.g. an OOM while
+    # loading the model and emit a bare {"error": ...} line instead of a
+    # chat chunk. This must not leak as a pydantic ValidationError.
+    body = (
+        '{"message": {"role": "assistant", "content": "Hi"}, "done": false}\n'
+        '{"error": "model requires more system memory (24.0 GiB) than is available (16.0 GiB)"}\n'
+    )
+    respx.post(f"{BASE_URL}/api/chat").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
+    )
+    seen = []
+    with pytest.raises(OllamaHTTPError) as exc_info:
+        async for chunk in ollama.chat("qwen3.8:27b", []):
+            seen.append(chunk)
+    assert len(seen) == 1  # the good line was yielded before the error line
+    assert "more system memory" in exc_info.value.message
+
+
+@respx.mock
+async def test_chat_unexpected_chunk_shape_raises_protocol_error(ollama: OllamaClient) -> None:
+    # Well-formed JSON that isn't a chat chunk at all (e.g. "message" as a
+    # string instead of an object) must not crash the generator uncaught.
+    body = '{"message": "not an object", "done": false}\n'
+    respx.post(f"{BASE_URL}/api/chat").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
+    )
+    with pytest.raises(OllamaProtocolError):
+        async for _ in ollama.chat("qwen3.8:27b", []):
+            pass
+
+
+@respx.mock
+async def test_show_model_sends_both_name_and_model_keys(ollama: OllamaClient) -> None:
+    route = respx.post(f"{BASE_URL}/api/show").mock(
+        return_value=httpx.Response(200, json={"details": {}, "model_info": {}})
+    )
+    await ollama.show_model("qwen3.8:27b")
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"model": "qwen3.8:27b", "name": "qwen3.8:27b"}
+
+
+@respx.mock
+async def test_list_models_is_cached_within_ttl(ollama: OllamaClient) -> None:
+    route = respx.get(f"{BASE_URL}/api/tags").mock(
+        return_value=httpx.Response(200, json={"models": [{"name": "m", "size": 1}]})
+    )
+    await ollama.list_models()
+    await ollama.list_models()
+    assert route.call_count == 1
+    ollama.invalidate_cache()
+    await ollama.list_models()
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_list_models_cache_expires_after_ttl() -> None:
+    route = respx.get(f"{BASE_URL}/api/tags").mock(
+        return_value=httpx.Response(200, json={"models": [{"name": "m", "size": 1}]})
+    )
+    async with httpx.AsyncClient() as client:
+        short_ttl_ollama = OllamaClient(BASE_URL, client, cache_ttl_seconds=0.05)
+        await short_ttl_ollama.list_models()
+        await asyncio.sleep(0.1)
+        await short_ttl_ollama.list_models()
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_context_length_is_cached_within_ttl(ollama: OllamaClient) -> None:
+    route = respx.post(f"{BASE_URL}/api/show").mock(
+        return_value=httpx.Response(
+            200, json={"details": {}, "model_info": {"qwenx.context_length": 4096}}
+        )
+    )
+    assert await ollama.context_length("m") == 4096
+    assert await ollama.context_length("m") == 4096
+    assert route.call_count == 1

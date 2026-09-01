@@ -13,6 +13,7 @@
   textarea { flex: 1; resize: none; font-family: inherit; font-size: 1rem; padding: 0.5rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; }
   button { padding: 0 1.2rem; border-radius: 8px; border: none; background: #2b5fd9; color: white; font-size: 1rem; cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: default; }
+  #stop { background: #7a2b2b; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
   select { padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; font-size: 0.95rem; max-width: 100%; }
   #status { font-size: 0.85rem; color: #999; margin: -0.5rem 0 1rem; }
@@ -28,22 +29,34 @@
 <form id="form">
   <textarea id="input" rows="2" placeholder="Type a message..."></textarea>
   <button type="submit" id="send">Send</button>
+  <button type="button" id="stop" style="display:none">Stop</button>
 </form>
 <script>
 const chatEl = document.getElementById('chat');
 const form = document.getElementById('form');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
+const stopBtn = document.getElementById('stop');
 const modelSelect = document.getElementById('model');
 const statusEl = document.getElementById('status');
 let messages = [];
 let loadedModel = null;
+let currentController = null;
 
 function setStatus() {
   statusEl.textContent = loadedModel
     ? `Currently loaded in GPU memory: ${loadedModel}`
     : 'No model currently loaded in GPU memory (first message on any model will take longer to load).';
 }
+
+function setSending(isSending) {
+  sendBtn.disabled = isSending;
+  stopBtn.style.display = isSending ? '' : 'none';
+}
+
+stopBtn.addEventListener('click', () => {
+  if (currentController) currentController.abort();
+});
 
 async function refreshLoaded() {
   try {
@@ -114,60 +127,95 @@ form.addEventListener('submit', async (e) => {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  sendBtn.disabled = true;
+  const controller = new AbortController();
+  currentController = controller;
+  setSending(true);
   messages.push({ role: 'user', content: text });
   addMessage('user', text);
-  const assistantDiv = addMessage('assistant', '');
+  const assistantDiv = addMessage('assistant', 'loading model…');
+
+  let full = '';
+  let gotDone = false;
+  let errorShown = false;
+
+  function showError(text) {
+    assistantDiv.textContent = full ? `${full}\n\n[error: ${text}]` : `[error: ${text}]`;
+    errorShown = true;
+  }
 
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, model: modelSelect.value }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch {}
-      assistantDiv.textContent = `[error: ${detail}]`;
-      messages.pop();
-      refreshLoaded();
-      return;
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let full = '';
-    let sawOutput = false;
-    assistantDiv.textContent = 'loading model…';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 1);
-        if (!line) continue;
-        const evt = JSON.parse(line);
-        if (evt.type === 'content') {
-          sawOutput = true;
-          full += evt.text;
-          assistantDiv.textContent = full;
-          chatEl.scrollTop = chatEl.scrollHeight;
-        } else if (evt.type === 'error') {
-          sawOutput = true;
-          assistantDiv.textContent = full ? `${full}\n\n[error: ${evt.message}]` : `[error: ${evt.message}]`;
+      if (res.status === 429) {
+        assistantDiv.textContent = `[server is busy, try again in a moment: ${detail}]`;
+      } else {
+        assistantDiv.textContent = `[error: ${detail}]`;
+      }
+      errorShown = true;
+    } else {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      readLoop: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          let evt;
+          try {
+            evt = JSON.parse(line);
+          } catch {
+            showError('malformed response from server');
+            break readLoop; // framing is untrustworthy from here on
+          }
+          if (evt.type === 'content') {
+            full += evt.text;
+            assistantDiv.textContent = full;
+            chatEl.scrollTop = chatEl.scrollHeight;
+          } else if (evt.type === 'error') {
+            showError(evt.message);
+          } else if (evt.type === 'done') {
+            gotDone = true;
+            console.log('gpu-chat: done', evt);
+          } else if (evt.type === 'queued') {
+            statusEl.textContent = `Queued - position ${evt.position}...`;
+          } else if (evt.type === 'ping' && statusEl.textContent.startsWith('Queued')) {
+            setStatus(); // we've left the queue and are generating now
+          }
         }
-        // 'ping'/'done'/'queued' events don't need to change the displayed text.
+      }
+      if (!gotDone && !errorShown) {
+        assistantDiv.textContent = full ? `${full}\n\n[stream interrupted]` : '[stream interrupted]';
       }
     }
-    if (!sawOutput) assistantDiv.textContent = '';
-    messages.push({ role: 'assistant', content: full });
-    refreshLoaded();
   } catch (err) {
-    assistantDiv.textContent = '[error: ' + err + ']';
+    if (err.name === 'AbortError') {
+      // Deliberate user action - keep whatever text arrived so far; only
+      // replace the stale "loading model..." placeholder if nothing did.
+      if (!full) assistantDiv.textContent = '[stopped]';
+    } else {
+      showError(String(err));
+    }
   } finally {
-    sendBtn.disabled = false;
+    if (full) {
+      messages.push({ role: 'assistant', content: full });
+    } else {
+      messages.pop(); // nothing came of this exchange - don't replay it to the model
+    }
+    currentController = null;
+    setSending(false);
+    refreshLoaded();
   }
 });
 </script>
