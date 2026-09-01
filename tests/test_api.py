@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 
 import httpx
-import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
@@ -12,7 +11,6 @@ from app.limiter import GenerationLimiter
 from app.ollama import OllamaConnectionError, OllamaHTTPError
 from app.schemas import (
     ContentEvent,
-    DoneEvent,
     ErrorEvent,
     OllamaChatChunk,
     OllamaChatMessageChunk,

@@ -29,6 +29,7 @@ from app.schemas import (
     StreamEvent,
 )
 
+
 def get_ollama_client(request: Request) -> OllamaClient:
     ollama: OllamaClient = request.app.state.ollama
     return ollama
