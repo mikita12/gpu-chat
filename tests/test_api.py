@@ -1,16 +1,19 @@
 import asyncio
 import contextlib
+import json
 
 import httpx
 from fastapi import FastAPI
 from httpx import ASGITransport
 
+from app import metrics
 from app.api import _produce, generate_events, router
 from app.config import get_settings
 from app.limiter import GenerationLimiter
 from app.ollama import OllamaConnectionError, OllamaHTTPError
 from app.schemas import (
     ContentEvent,
+    DoneEvent,
     ErrorEvent,
     OllamaChatChunk,
     OllamaChatMessageChunk,
@@ -274,6 +277,70 @@ async def test_chat_trims_history_to_context_window() -> None:
     assert fake.last_chat_messages is not None
     assert len(fake.last_chat_messages) < 3
     assert fake.last_chat_messages[-1].content == "x" * 40
+
+
+async def test_active_generations_gauge_returns_to_baseline_after_request() -> None:
+    fake = FakeOllamaClient(chunks=[OllamaChatChunk(message=OllamaChatMessageChunk(content="hi"), done=True)])
+    limiter = GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    ticket = limiter.reserve()
+    before = metrics.ACTIVE_GENERATIONS._value.get()
+    events = [e async for e in generate_events(fake, "m", [], fast_settings(), limiter, ticket)]  # type: ignore[arg-type]
+    assert any(isinstance(e, DoneEvent) for e in events)
+    after = metrics.ACTIVE_GENERATIONS._value.get()
+    assert after == before  # inc()'d while running, dec()'d again once done
+
+
+async def test_errors_total_counter_increments_on_stall() -> None:
+    fake = FakeOllamaClient(hang_seconds=10.0)
+    settings = fast_settings(heartbeat_seconds=0.02, stall_timeout_seconds=0.08)
+    limiter = GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    ticket = limiter.reserve()
+    before = metrics.ERRORS_TOTAL.labels(code="stall")._value.get()
+    events = await asyncio.wait_for(
+        _collect(generate_events(fake, "m", [], settings, limiter, ticket)),  # type: ignore[arg-type]
+        timeout=5.0,
+    )
+    assert isinstance(events[-1], ErrorEvent)
+    after = metrics.ERRORS_TOTAL.labels(code="stall")._value.get()
+    assert after == before + 1
+
+
+async def test_queue_wait_seconds_gets_a_sample_when_a_request_actually_waits() -> None:
+    limiter = GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    settings = fast_settings(heartbeat_seconds=0.05, stall_timeout_seconds=10.0)
+
+    fake1 = FakeOllamaClient(hang_seconds=0.2)
+    ticket1 = limiter.reserve()
+    task1 = asyncio.create_task(_collect(generate_events(fake1, "m", [], settings, limiter, ticket1)))  # type: ignore[arg-type]
+
+    await asyncio.sleep(0.02)
+    before = metrics.QUEUE_WAIT_SECONDS._sum.get()
+    fake2 = FakeOllamaClient(chunks=[OllamaChatChunk(message=OllamaChatMessageChunk(content="hi"), done=True)])
+    ticket2 = limiter.reserve()
+    await asyncio.wait_for(
+        _collect(generate_events(fake2, "m", [], settings, limiter, ticket2)),  # type: ignore[arg-type]
+        timeout=5.0,
+    )
+    after = metrics.QUEUE_WAIT_SECONDS._sum.get()
+    assert after > before  # request 2 actually waited, so it got a real sample
+
+    await task1
+
+
+async def test_request_id_is_consistent_within_a_request_and_differs_across_requests() -> None:
+    fake = FakeOllamaClient(chunks=[OllamaChatChunk(message=OllamaChatMessageChunk(content="hi"), done=True)])
+    app = make_app(fake)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {"messages": [{"role": "user", "content": "hi"}], "model": "test-model"}
+        resp1 = await client.post("/api/chat", json=payload)
+        resp2 = await client.post("/api/chat", json=payload)
+
+    done1 = json.loads(resp1.text.strip().splitlines()[-1])
+    done2 = json.loads(resp2.text.strip().splitlines()[-1])
+    assert done1["request_id"] is not None
+    assert done2["request_id"] is not None
+    assert done1["request_id"] != done2["request_id"]
 
 
 async def _collect(agen: object) -> list[StreamEvent]:

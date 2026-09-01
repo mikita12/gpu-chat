@@ -2,14 +2,17 @@ import asyncio
 import contextlib
 import hmac
 import time
+import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.responses import StreamingResponse
 
+from app import metrics
 from app.config import Settings, get_settings
 from app.limiter import GenerationLimiter, QueueFullError, Ticket
+from app.logging_config import get_logger, request_id_var
 from app.ollama import (
     OllamaClient,
     OllamaConnectionError,
@@ -80,13 +83,16 @@ async def loaded(ollama: OllamaDep, settings: SettingsDep) -> LoadedResponse:
 
 
 def _error_event(exc: OllamaError) -> ErrorEvent:
+    request_id = request_id_var.get()
     if isinstance(exc, OllamaHTTPError):
-        return ErrorEvent(message=exc.message, code=f"upstream_http_{exc.status_code}")
+        return ErrorEvent(message=exc.message, code=f"upstream_http_{exc.status_code}", request_id=request_id)
     if isinstance(exc, OllamaConnectionError):
-        return ErrorEvent(message="could not reach the model server", code="connection")
+        return ErrorEvent(message="could not reach the model server", code="connection", request_id=request_id)
     if isinstance(exc, OllamaProtocolError):
-        return ErrorEvent(message="unexpected response from the model server", code="protocol")
-    return ErrorEvent(message=str(exc), code="unknown")
+        return ErrorEvent(
+            message="unexpected response from the model server", code="protocol", request_id=request_id
+        )
+    return ErrorEvent(message=str(exc), code="unknown", request_id=request_id)
 
 
 async def _produce(
@@ -121,6 +127,7 @@ async def _produce(
                             prompt_eval_duration=chunk.prompt_eval_duration,
                             load_duration=chunk.load_duration,
                             total_duration=chunk.total_duration,
+                            request_id=request_id_var.get(),
                         )
                     )
     except OllamaError as exc:
@@ -158,7 +165,11 @@ async def generate_events(
     callers - including tests simulating a client disconnect - rely on
     calling .aclose() to trigger the cleanup in the `finally` block below.
     """
+    request_id = request_id_var.get()
+    logger = get_logger()
     acquired = False
+    queue_wait_start = time.monotonic()
+    metrics.QUEUE_DEPTH.set(limiter.queue_depth)
     try:
         # Queueing phase: wait our turn. Not subject to the stall watchdog
         # below - waiting for a free slot under load can legitimately take
@@ -176,7 +187,13 @@ async def generate_events(
                 yield PingEvent()
         acquired = True
         limiter.mark_running(ticket)
+        metrics.QUEUE_WAIT_SECONDS.observe(time.monotonic() - queue_wait_start)
+        metrics.QUEUE_DEPTH.set(limiter.queue_depth)
+        metrics.ACTIVE_GENERATIONS.inc()
+        logger.info("chat request started", extra={"model": model, "message_count": len(messages)})
 
+        gen_start = time.monotonic()
+        ttft_recorded = False
         queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue(maxsize=settings.stream_queue_maxsize)
         task = asyncio.create_task(_produce(ollama, model, messages, queue))
         last_progress = time.monotonic()
@@ -186,13 +203,27 @@ async def generate_events(
                     item = await asyncio.wait_for(queue.get(), timeout=settings.heartbeat_seconds)
                 except TimeoutError:
                     if time.monotonic() - last_progress >= settings.stall_timeout_seconds:
-                        yield ErrorEvent(message="model did not respond in time", code="stall")
+                        err = ErrorEvent(message="model did not respond in time", code="stall", request_id=request_id)
+                        metrics.ERRORS_TOTAL.labels(code=err.code).inc()
+                        logger.error("chat request stalled", extra={"code": err.code})
+                        yield err
                         return
                     yield PingEvent()
                     continue
                 if item is None:
                     return
                 last_progress = time.monotonic()
+                if isinstance(item, ContentEvent) and not ttft_recorded:
+                    metrics.TTFT_SECONDS.observe(time.monotonic() - gen_start)
+                    ttft_recorded = True
+                elif isinstance(item, DoneEvent):
+                    if item.eval_count is not None and item.eval_duration:
+                        metrics.TOKENS_PER_SECOND.observe(item.eval_count / (item.eval_duration / 1e9))
+                elif isinstance(item, ErrorEvent):
+                    metrics.ERRORS_TOTAL.labels(code=item.code).inc()
+                    logger.error(
+                        "chat request failed", extra={"code": item.code, "error_message": item.message}
+                    )
                 yield item
                 if isinstance(item, DoneEvent | ErrorEvent):
                     return
@@ -208,6 +239,8 @@ async def generate_events(
             with contextlib.suppress(asyncio.CancelledError):
                 await task
     finally:
+        if acquired:
+            metrics.ACTIVE_GENERATIONS.dec()
         await limiter.release(ticket, acquired)
 
 
@@ -282,6 +315,12 @@ async def chat(req: ChatRequest, ollama: OllamaDep, settings: SettingsDep, limit
         ticket = limiter.reserve()
     except QueueFullError as exc:
         raise HTTPException(status_code=429, detail="server is busy, try again shortly") from exc
+
+    # asyncio.create_task() (inside generate_events/_produce) snapshots the
+    # current contextvars.Context at creation time, so setting this here -
+    # before those tasks exist - makes it visible inside them too, with no
+    # need to thread request_id through as an explicit parameter.
+    request_id_var.set(uuid.uuid4().hex[:12])
 
     async def stream() -> AsyncIterator[bytes]:
         async for event in generate_events(ollama, model, messages, settings, limiter, ticket):

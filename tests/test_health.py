@@ -58,3 +58,37 @@ async def test_readyz_does_not_require_bearer_token() -> None:
         # require_auth the way /api/* routes are.
         resp = await client.get("/readyz")
     assert resp.status_code == 200
+
+
+async def test_healthz_ok_with_no_ollama_dependency() -> None:
+    app = make_app(FakeOllamaClient())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/healthz")
+    assert resp.status_code == 200
+
+
+async def test_healthz_does_not_require_bearer_token() -> None:
+    app = make_app(FakeOllamaClient(), bearer_token="secret")
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/healthz")
+    assert resp.status_code == 200
+
+
+async def test_metrics_endpoint_returns_prometheus_format() -> None:
+    app = make_app(FakeOllamaClient())
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers["content-type"]
+    assert "gpu_chat_active_generations" in resp.text
+
+
+async def test_metrics_does_not_require_bearer_token() -> None:
+    app = make_app(FakeOllamaClient(), bearer_token="secret")
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200

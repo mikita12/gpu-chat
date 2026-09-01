@@ -25,10 +25,14 @@ it down.
 | type | fields | backend guarantees | frontend must do |
 |---|---|---|---|
 | `content` | `text: string` | one per generated token/chunk, in order | append `text` to the displayed reply |
-| `ping` | - | sent every `HEARTBEAT_SECONDS` (default 10s) while otherwise idle (e.g. during model load), purely to keep the connection alive | safe to ignore for content purposes; may use it to detect "still working" |
-| `queued` | `position: number` | *(not yet emitted - Phase 3)* will be sent while a request waits for a free generation slot | show `position` in the status line; expect more `content`/`ping` once generation actually starts |
-| `done` | `eval_count`, `eval_duration`, `prompt_eval_count`, `prompt_eval_duration`, `load_duration`, `total_duration` (all nanoseconds except counts, all nullable) | sent exactly once, last, on a clean finish - and *only* then | treat its absence as a truncated/interrupted stream, not a clean end; the timing fields are for diagnostics (currently just logged to the console) |
-| `error` | `message: string`, `code: string` | sent on any failure (upstream HTTP error, connection failure, malformed/unexpected data from Ollama, or a stall with no progress for `STALL_TIMEOUT_SECONDS`) - always terminates the stream | show `message`; do not treat the exchange as successful |
+| `ping` | - | sent every `HEARTBEAT_SECONDS` (default 10s) while otherwise idle (e.g. during model load or while queued), purely to keep the connection alive | safe to ignore for content purposes; may use it to detect "still working" |
+| `queued` | `position: number` | sent while a request waits for a free generation slot (`MAX_CONCURRENT_GENERATIONS`), re-sent whenever `position` changes | show `position` in the status line; expect more `content`/`ping` once generation actually starts |
+| `done` | `eval_count`, `eval_duration`, `prompt_eval_count`, `prompt_eval_duration`, `load_duration`, `total_duration` (all nanoseconds except counts, all nullable), `request_id: string \| null` | sent exactly once, last, on a clean finish - and *only* then | treat its absence as a truncated/interrupted stream, not a clean end; the timing fields are for diagnostics (currently just logged to the console) |
+| `error` | `message: string`, `code: string`, `request_id: string \| null` | sent on any failure (upstream HTTP error, connection failure, malformed/unexpected data from Ollama, or a stall with no progress for `STALL_TIMEOUT_SECONDS`) - always terminates the stream | show `message`; do not treat the exchange as successful |
+
+`request_id` (on `done`/`error`) identifies the request in the server's
+structured logs (see Observability below) - the same id is stable across
+every event one request emits, and differs between requests.
 
 Example line: `{"type":"content","text":"Hello"}`
 
@@ -122,6 +126,28 @@ trimmed automatically (oldest non-system messages dropped first, using a
 rough chars-per-token estimate - there's no real tokenizer for arbitrary
 Ollama models) - that's separate from `MAX_MESSAGES`/`MAX_MESSAGE_CHARS`/
 `MAX_PROMPT_CHARS` above, which are hard rejects rather than trimming.
+
+## Observability
+
+Three endpoints, all unauthenticated regardless of `BEARER_TOKEN` (a
+health check or metrics scrape shouldn't need API credentials):
+
+- `GET /healthz` - process liveness only, no Ollama call.
+- `GET /readyz` - process liveness *and* Ollama is reachable. What
+  `update.sh` polls before cutting a deploy over.
+- `GET /metrics` - Prometheus exposition format:
+  `gpu_chat_ttft_seconds` (time to first token), `gpu_chat_tokens_per_second`,
+  `gpu_chat_queue_depth` (currently waiting for a slot),
+  `gpu_chat_queue_wait_seconds`, `gpu_chat_active_generations`, and
+  `gpu_chat_errors_total{code=...}`.
+
+The app also logs structured JSON (one object per line: timestamp, level,
+message, and `request_id` when set) to stdout under the `gpu_chat` logger
+name - request start/failure events are tagged with the same `request_id`
+that shows up in that request's `done`/`error` stream events, so a
+user-reported failure can be grepped straight to its log line
+(`journalctl --user -u gpu-chat.service | grep <request_id>`). This is
+separate from uvicorn's own access/error logging, which is untouched.
 
 ## Security note
 

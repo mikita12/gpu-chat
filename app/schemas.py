@@ -42,12 +42,14 @@ class DoneEvent(BaseModel):
     prompt_eval_duration: int | None = None
     load_duration: int | None = None
     total_duration: int | None = None
+    request_id: str | None = None
 
 
 class ErrorEvent(BaseModel):
     type: Literal["error"] = "error"
     message: str
     code: str
+    request_id: str | None = None
 
 
 StreamEvent = Annotated[

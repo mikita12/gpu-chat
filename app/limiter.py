@@ -49,6 +49,11 @@ class GenerationLimiter:
         """1-indexed position of `ticket` among tickets still waiting."""
         return self._waiting.index(ticket) + 1
 
+    @property
+    def queue_depth(self) -> int:
+        """How many tickets are currently waiting (not yet running)."""
+        return len(self._waiting)
+
     def mark_running(self, ticket: Ticket) -> None:
         """Call once ticket.acquire_task has completed and the permit is
         actually about to be used - removes it from wait-queue capacity
