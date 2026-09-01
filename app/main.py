@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import router
 from app.config import get_settings
+from app.limiter import GenerationLimiter
 from app.ollama import OllamaClient
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -22,6 +23,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)) as client:
         app.state.ollama = OllamaClient(
             settings.ollama_url, client, cache_ttl_seconds=settings.ollama_cache_ttl_seconds
+        )
+        app.state.limiter = GenerationLimiter(
+            settings.max_concurrent_generations, settings.max_queue_size
         )
         yield
 
