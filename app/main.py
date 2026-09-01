@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import router
 from app.config import get_settings
+from app.health import router as health_router
 from app.limiter import GenerationLimiter
 from app.ollama import OllamaClient
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(router)
+    app.include_router(health_router)
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
 

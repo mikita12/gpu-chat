@@ -3,8 +3,8 @@ Description=GPU chat webapp (FastAPI + Ollama)
 After=network.target
 
 [Service]
-WorkingDirectory=__REPO_DIR__
-ExecStart=__REPO_DIR__/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+WorkingDirectory=__REPO_DIR__/current
+ExecStart=__REPO_DIR__/current/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 Environment=OLLAMA_URL=http://127.0.0.1:11434
 Environment=OLLAMA_MODEL=qwen3.8:27b

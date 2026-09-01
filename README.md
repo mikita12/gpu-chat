@@ -44,21 +44,39 @@ cd gpu-chat
 ./install.sh
 ```
 
-This creates a venv, installs a **user-level** systemd service
-(`gpu-chat.service`) serving the app on `0.0.0.0:8000`, and a timer
+This creates the first release under `releases/<git-sha>/` (its own git
+checkout + venv, symlinked as `current`), a **user-level** systemd service
+(`gpu-chat.service`) serving `current` on `0.0.0.0:8000`, and a timer
 (`gpu-chat-update.timer`) that checks `origin/main` for new commits every 5
 minutes.
 
 Open `http://<giga2-lan-ip>:8000` from any machine on the LAN.
 
-## Heads up: it auto-updates itself
+## Heads up: it auto-updates itself - but only if the new version is healthy
 
 Every 5 minutes, `gpu-chat-update.timer` runs `update.sh`, which does
-`git fetch` + compares to `origin/main`. If there's a new commit, it does a
-**hard reset to `origin/main`** (any local edits to files in this checkout
-will be discarded), reinstalls dependencies, and restarts the service. This
-means pushing to `origin/main` deploys to giga2 within 5 minutes, with no
-manual step on the server.
+`git fetch` and compares `origin/main` against whatever `current` points at.
+If there's a new commit, it does **not** touch the live service right away:
+
+1. Builds the new commit as its own release (`releases/<sha>/` - a fresh
+   git worktree + venv).
+2. Starts *that* release on a scratch port (`127.0.0.1:8099`) using the
+   same Ollama config as the real service, and polls its `GET /readyz`
+   for up to 60s.
+3. **Only if that succeeds**, repoints `current` at the new release and
+   restarts `gpu-chat.service` (one real restart - not a zero-downtime
+   cutover).
+4. If it fails to build or fails the health check, the candidate release
+   is discarded and the currently-running one just keeps serving,
+   untouched - the failure is visible as a non-zero exit in the update
+   log, but nothing about the live chat changes.
+
+This means pushing to `origin/main` deploys to giga2 within 5 minutes *if*
+the new commit is actually healthy, with no manual step on the server. Old
+releases are pruned automatically, keeping only the current one and the
+immediately-previous one (a fast manual-rollback target: repoint `current`
+back with `ln -sfn releases/<old-sha> current` and
+`systemctl --user restart gpu-chat.service`).
 
 - Update log: `journalctl --user -u gpu-chat-update.service -f`
 - App log: `journalctl --user -u gpu-chat.service -f`
@@ -66,7 +84,9 @@ manual step on the server.
 - To turn them back on: `systemctl --user enable --now gpu-chat-update.timer`
 
 If you need to change something on the server directly, either commit it to
-the repo (so it survives the next update) or disable the timer first.
+the repo (so it survives the next update) or disable the timer first - and
+note any change should go in the top-level checkout (where `install.sh`
+was run), not inside a `releases/<sha>/` directory, which is disposable.
 
 ## Keeping it running after logout
 
