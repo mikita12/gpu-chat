@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>gpu-chat</title>
+<style>
+  @font-face {
+    font-family: 'Inter';
+    src: url('/fonts/Inter-variable.woff2') format('woff2');
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  :root {
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px;
+    --radius-sm: 4px; --radius-md: 8px; --radius-lg: 14px;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-size-xs: 0.75rem; --font-size-sm: 0.875rem; --font-size-base: 1rem; --font-size-lg: 1.1875rem; --font-size-xl: 1.5rem;
+    --duration-fast: 120ms; --duration-base: 190ms; --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+    --color-bg: #ffffff;
+    --color-surface: #f5f5f6;
+    --color-surface-raised: #ffffff;
+    --color-border: #e1e1e4;
+    --color-border-strong: #c7c7cc;
+    --color-text: #17171a;
+    --color-text-muted: #6b6b74;
+    --color-text-faint: #97979f;
+    --color-accent: #2952cc;
+    --color-accent-hover: #1f3fa3;
+    --color-on-accent: #ffffff;
+    --color-danger: #b3261e;
+    --color-danger-bg: #fbeceb;
+    --color-danger-border: #eecbc8;
+    --color-focus-ring: #2952cc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-bg: #131316; --color-surface: #1b1b1f; --color-surface-raised: #202024;
+      --color-border: #303036; --color-border-strong: #45454d;
+      --color-text: #ededf0; --color-text-muted: #a3a3ab; --color-text-faint: #737379;
+      --color-accent: #6f8fef; --color-accent-hover: #8aa4f3; --color-on-accent: #0d1526;
+      --color-danger: #ef6a62; --color-danger-bg: #2a1715; --color-danger-border: #4a251f;
+      --color-focus-ring: #8aa4f3;
+    }
+  }
+  :root[data-theme="dark"] {
+    --color-bg: #131316; --color-surface: #1b1b1f; --color-surface-raised: #202024;
+    --color-border: #303036; --color-border-strong: #45454d;
+    --color-text: #ededf0; --color-text-muted: #a3a3ab; --color-text-faint: #737379;
+    --color-accent: #6f8fef; --color-accent-hover: #8aa4f3; --color-on-accent: #0d1526;
+    --color-danger: #ef6a62; --color-danger-bg: #2a1715; --color-danger-border: #4a251f;
+    --color-focus-ring: #8aa4f3;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-base);
+    line-height: 1.5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+  }
+  :focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+  .card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+  }
+  h1 { font-size: var(--font-size-lg); font-weight: 600; margin: 0 0 var(--space-5); letter-spacing: -0.01em; }
+
+  .tabs { display: flex; gap: var(--space-1); margin-bottom: var(--space-5); border-bottom: 1px solid var(--color-border); }
+  .tab {
+    font: inherit; font-size: var(--font-size-sm); font-weight: 500;
+    background: none; border: none; color: var(--color-text-muted);
+    padding: var(--space-2) var(--space-1); cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    transition: color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  }
+  .tab[aria-selected="true"] { color: var(--color-text); border-color: var(--color-accent); }
+
+  form { display: flex; flex-direction: column; gap: var(--space-4); }
+  form[hidden] { display: none; }
+  label { font-size: var(--font-size-sm); font-weight: 500; display: block; margin-bottom: var(--space-1); }
+  input {
+    width: 100%;
+    font: inherit; font-size: 16px;
+    color: var(--color-text); background: var(--color-surface);
+    border: 1px solid var(--color-border); border-radius: var(--radius-md);
+    padding: var(--space-3); height: 44px;
+  }
+  .hint { font-size: var(--font-size-xs); color: var(--color-text-faint); margin-top: var(--space-1); }
+
+  .btn {
+    font: inherit; font-size: var(--font-size-sm); font-weight: 500;
+    height: 44px; border-radius: var(--radius-md); border: 1px solid var(--color-accent);
+    background: var(--color-accent); color: var(--color-on-accent);
+    cursor: pointer; transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  }
+  .btn:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+
+  .error:not([hidden]) {
+    display: block;
+    font-size: var(--font-size-sm);
+    color: var(--color-danger);
+    background: var(--color-danger-bg);
+    border: 1px solid var(--color-danger-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>gpu-chat</h1>
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab" id="tab-login" role="tab" aria-selected="true">Sign in</button>
+    <button type="button" class="tab" id="tab-register" role="tab" aria-selected="false">Create account</button>
+  </div>
+
+  <p class="error" id="error" hidden></p>
+
+  <form id="login-form">
+    <div>
+      <label for="login-username">Username</label>
+      <input id="login-username" name="username" autocomplete="username" required>
+    </div>
+    <div>
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn" id="login-submit">Sign in</button>
+  </form>
+
+  <form id="register-form" hidden>
+    <div>
+      <label for="register-username">Username</label>
+      <input id="register-username" name="username" autocomplete="username" required minlength="3" maxlength="32">
+      <p class="hint">3-32 characters.</p>
+    </div>
+    <div>
+      <label for="register-password">Password</label>
+      <input id="register-password" name="password" type="password" autocomplete="new-password" required minlength="8">
+      <p class="hint">At least 8 characters. This app is for trusted LAN use - there's no email verification or password reset.</p>
+    </div>
+    <button type="submit" class="btn" id="register-submit">Create account</button>
+  </form>
+</div>
+<script>
+'use strict';
+
+try {
+  const saved = localStorage.getItem('gpu-chat-theme');
+  if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+} catch {}
+
+const errorEl = document.getElementById('error');
+const loginForm = document.getElementById('login-form');
+const registerForm = document.getElementById('register-form');
+const tabLogin = document.getElementById('tab-login');
+const tabRegister = document.getElementById('tab-register');
+
+function showTab(which) {
+  const isLogin = which === 'login';
+  loginForm.hidden = !isLogin;
+  registerForm.hidden = isLogin;
+  tabLogin.setAttribute('aria-selected', String(isLogin));
+  tabRegister.setAttribute('aria-selected', String(!isLogin));
+  errorEl.hidden = true;
+}
+tabLogin.addEventListener('click', () => showTab('login'));
+tabRegister.addEventListener('click', () => showTab('register'));
+
+function showError(message) {
+  errorEl.textContent = message;
+  errorEl.hidden = false;
+}
+
+async function submitJSON(url, body, submitBtn) {
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      window.location.href = '/';
+      return;
+    }
+    let message = 'Something went wrong.';
+    try {
+      const data = await res.json();
+      if (data && data.detail && data.detail.message) message = data.detail.message;
+    } catch {}
+    showError(message);
+  } catch {
+    showError('Could not reach the server.');
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+loginForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  errorEl.hidden = true;
+  submitJSON('/api/auth/login', {
+    username: document.getElementById('login-username').value,
+    password: document.getElementById('login-password').value,
+  }, document.getElementById('login-submit'));
+});
+
+registerForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  errorEl.hidden = true;
+  submitJSON('/api/auth/register', {
+    username: document.getElementById('register-username').value,
+    password: document.getElementById('register-password').value,
+  }, document.getElementById('register-submit'));
+});
+
+// Already signed in? Don't make them log in again.
+fetch('/api/auth/me').then((res) => { if (res.ok) window.location.href = '/'; }).catch(() => {});
+</script>
+</body>
+</html>

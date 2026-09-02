@@ -11,6 +11,9 @@ REPO_DIR="$(pwd)"
 
 SHA=$(git rev-parse HEAD)
 mkdir -p releases
+# Sibling to releases/, not inside any one of them - see the DATABASE_URL
+# comment in systemd/gpu-chat.service for why.
+mkdir -p data
 git worktree add "releases/$SHA" "$SHA"
 python3 -m venv "releases/$SHA/.venv"
 "releases/$SHA/.venv/bin/pip" install -q -r "releases/$SHA/requirements.txt"

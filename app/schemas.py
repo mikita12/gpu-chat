@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
@@ -22,6 +23,16 @@ class ChatRequest(BaseModel):
 
 class ContentEvent(BaseModel):
     type: Literal["content"] = "content"
+    text: str
+
+
+class ThinkingEvent(BaseModel):
+    """A chunk of a reasoning model's thinking trace (Ollama's
+    `message.thinking`), kept distinct from ContentEvent so a client can
+    render it separately (e.g. collapsed) and so it's obviously never the
+    text that should be appended to the visible reply."""
+
+    type: Literal["thinking"] = "thinking"
     text: str
 
 
@@ -65,7 +76,7 @@ class ErrorEvent(BaseModel):
 
 
 StreamEvent = Annotated[
-    ContentEvent | PingEvent | QueuedEvent | GeneratingEvent | DoneEvent | ErrorEvent,
+    ContentEvent | ThinkingEvent | PingEvent | QueuedEvent | GeneratingEvent | DoneEvent | ErrorEvent,
     Field(discriminator="type"),
 ]
 
@@ -73,6 +84,54 @@ StreamEvent = Annotated[
 class LoadedResponse(BaseModel):
     loaded: list[str]
     default: str
+
+
+# --- Accounts ----------------------------------------------------------
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserOut(BaseModel):
+    username: str
+
+
+# --- Conversations -------------------------------------------------------
+
+
+class CreateConversationRequest(BaseModel):
+    model: str | None = None
+    title: str | None = None
+
+
+class ConversationOut(BaseModel):
+    id: int
+    title: str | None
+    model: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MessageOut(BaseModel):
+    role: Role
+    content: str
+    thinking: str | None
+    created_at: datetime
+
+
+class ConversationDetailOut(ConversationOut):
+    messages: list[MessageOut]
+
+
+class PostMessageRequest(BaseModel):
+    content: str
 
 
 # --- Ollama's own response shapes (only the fields this app reads) ---------
@@ -111,6 +170,10 @@ class OllamaShowResponse(BaseModel):
 class OllamaChatMessageChunk(BaseModel):
     role: str = "assistant"
     content: str = ""
+    # Present when Ollama is running a reasoning model with thinking
+    # enabled. Never sent back upstream - see ChatMessage above, which has
+    # no such field at all.
+    thinking: str = ""
 
 
 class OllamaChatChunk(BaseModel):

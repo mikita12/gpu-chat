@@ -20,7 +20,11 @@ class Settings(BaseSettings):
     # Streaming behaviour (app/api.py).
     heartbeat_seconds: float = 10.0
     stall_timeout_seconds: float = 90.0
-    stream_queue_maxsize: int = 64
+    # Small on purpose: on a memory-constrained host (e.g. a Raspberry Pi
+    # proxying to Ollama on a separate machine), a slow or backgrounded
+    # client should only ever buffer a handful of events in *this*
+    # process's RAM, not accumulate unbounded backlog.
+    stream_queue_maxsize: int = 16
 
     # Concurrency (Phase 3).
     max_concurrent_generations: int = 1
@@ -34,7 +38,20 @@ class Settings(BaseSettings):
     # Auth (Phase 4). Empty string (default) means auth is disabled - anyone
     # can use the API, matching today's zero-friction LAN behaviour. Setting
     # this env var to a non-empty value turns on bearer-token enforcement.
+    # Orthogonal to the per-user session system below - this gates the
+    # stateless /api/chat passthrough for scripted/curl access.
     bearer_token: str = ""
+
+    # Accounts and per-user conversation persistence.
+    #
+    # Relative path is fine for local/dev use (`uvicorn app.main:app` from
+    # the repo root). A systemd deployment MUST override this to an
+    # absolute path outside any releases/<sha>/ worktree - see README - or
+    # the database gets deleted on the next auto-deploy.
+    database_url: str = "sqlite+aiosqlite:///./gpu_chat.db"
+    session_cookie_name: str = "gpu_chat_session"
+    session_ttl_seconds: float = 60 * 60 * 24 * 30  # 30 days
+    session_cleanup_interval_seconds: float = 60 * 60  # hourly sweep
 
 
 @lru_cache

@@ -460,17 +460,168 @@
     .topbar h1 { font-size: var(--font-size-base); }
     select { max-width: 38vw; }
   }
+
+  /* -----------------------------------------------------------------------
+     Sidebar (conversations)
+  ----------------------------------------------------------------------- */
+  .shell {
+    display: flex;
+    height: 100vh;
+    height: 100dvh;
+    width: 100%;
+  }
+  .sidebar {
+    width: 260px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border-right: 1px solid var(--color-border);
+  }
+  .sidebar-header {
+    padding: var(--space-3);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .sidebar-new {
+    width: 100%;
+    height: 44px;
+  }
+  .conv-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .conv-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    border-radius: var(--radius-md);
+  }
+  .conv-item-select {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    font: inherit;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    background: none;
+    border: none;
+    padding: var(--space-3);
+    min-height: 44px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .conv-item-select:hover { background: var(--color-border); color: var(--color-text); }
+  .conv-item[data-active="true"] .conv-item-select {
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    font-weight: 500;
+    border: 1px solid var(--color-border);
+  }
+  .conv-item-delete {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    color: var(--color-text-faint);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .conv-item-delete:hover { color: var(--color-danger); background: var(--color-danger-bg); }
+  .conv-item-delete svg { width: 16px; height: 16px; stroke: currentColor; fill: none; }
+  .conv-empty {
+    padding: var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-faint);
+  }
+
+  .sidebar-scrim {
+    display: none;
+  }
+
+  #sidebar-toggle { display: none; }
+
+  @media (max-width: 768px) {
+    .shell { position: relative; overflow: hidden; }
+    .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(280px, 82vw);
+      z-index: 20;
+      transform: translateX(-100%);
+      transition: transform var(--duration-base) var(--ease-out);
+    }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-scrim:not([hidden]) {
+      display: block;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 15;
+    }
+    #sidebar-toggle { display: inline-flex; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar { transition: none; }
+  }
+
+  /* -----------------------------------------------------------------------
+     Thinking trace (reasoning models) - collapsed by default, deliberately
+     quieter than the reply itself.
+  ----------------------------------------------------------------------- */
+  .thinking:not([hidden]) {
+    margin-bottom: var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+  .thinking summary {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--color-text-faint);
+  }
+  .thinking-content {
+    margin-top: var(--space-2);
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--color-border);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
 </style>
 </head>
 <body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button type="button" id="new-chat" class="btn btn-primary sidebar-new">New chat</button>
+    </div>
+    <nav class="conv-list" id="conv-list" aria-label="Conversations"></nav>
+  </aside>
+  <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
 <div class="app">
   <header class="topbar">
+    <button type="button" id="sidebar-toggle" class="icon-btn" aria-label="Toggle conversations">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
     <h1>gpu-chat</h1>
     <div class="topbar-controls">
       <select id="model" aria-label="Model"><option>loading models…</option></select>
       <button type="button" id="theme-toggle" class="icon-btn" aria-label="Toggle color theme">
         <svg id="theme-icon-dark" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
         <svg id="theme-icon-light" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+      <button type="button" id="logout" class="icon-btn" aria-label="Log out">
+        <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
       </button>
     </div>
   </header>
@@ -486,6 +637,7 @@
       <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
     </button>
   </form>
+</div>
 </div>
 <script>
 'use strict';
@@ -517,6 +669,7 @@ const ERROR_INFO = {
   unknown_model: { message: 'That model is not available anymore.', retryable: false },
   invalid_request: { message: 'That message could not be sent as-is.', retryable: false },
   unauthorized: { message: 'Not authorized.', retryable: false },
+  not_found: { message: 'This conversation no longer exists.', retryable: false },
   protocol: { message: 'The server sent something unexpected.', retryable: false },
   unknown: { message: 'An unexpected error occurred.', retryable: false },
 };
@@ -686,7 +839,7 @@ async function refreshLoaded() {
   }
 }
 
-(async function initModels() {
+async function initModels() {
   try {
     const [names, loadedData] = await Promise.all([
       fetch('/api/models').then((r) => r.json()),
@@ -704,9 +857,12 @@ async function refreshLoaded() {
   } catch {
     modelSelect.innerHTML = '<option>failed to load models</option>';
   }
-})();
+}
 
 modelSelect.addEventListener('change', () => {
+  // A conversation pins its model at creation - the selector is disabled
+  // whenever one is loaded (see loadConversation/ensureConversation below),
+  // so this only ever fires while choosing the model for a NEW conversation.
   if (loadedModel && modelSelect.value !== loadedModel) {
     const ok = confirm(
       `"${loadedModel}" is currently loaded in GPU memory. Switching to "${modelSelect.value}" will unload it and load the new one instead — this can take anywhere from several seconds to over a minute.\n\n` +
@@ -771,6 +927,7 @@ function createAssistantMessage() {
   wrap.innerHTML =
     '<div class="bubble">' +
     '<div class="state-label" hidden></div>' +
+    '<details class="thinking" hidden><summary>Thinking</summary><div class="thinking-content"></div></details>' +
     '<div class="prose"></div>' +
     '<div class="meta-line" hidden></div>' +
     '<div class="error-actions" hidden></div>' +
@@ -798,9 +955,17 @@ function renderExchange(ex) {
   const el = ex.el;
   el.dataset.state = ex.state;
   const labelEl = el.querySelector('.state-label');
+  const thinkingEl = el.querySelector('.thinking');
   const proseEl = el.querySelector('.prose');
   const metaEl = el.querySelector('.meta-line');
   const actionsEl = el.querySelector('.error-actions');
+
+  if (ex.thinkingBuffer) {
+    thinkingEl.hidden = false;
+    thinkingEl.querySelector('.thinking-content').textContent = ex.thinkingBuffer;
+  } else {
+    thinkingEl.hidden = true;
+  }
 
   if (ex.state === STATE.QUEUED || ex.state === STATE.SUBMITTED || ex.state === STATE.GENERATING) {
     const info = STATE_LABELS[ex.state];
@@ -819,7 +984,7 @@ function renderExchange(ex) {
   const html = ex.stoppedEarly ? '' : renderMarkdown(ex.buffer);
   proseEl.innerHTML = html + (ex.state === STATE.GENERATING && ex.buffer ? '<span class="cursor"></span>' : '');
 
-  if (ex.state === STATE.DONE && !ex.stoppedEarly) {
+  if (ex.state === STATE.DONE && !ex.stoppedEarly && !ex.historical) {
     metaEl.hidden = false;
     metaEl.textContent = formatMeta(ex);
   } else if (ex.state === STATE.GENERATING && ex.buffer) {
@@ -901,10 +1066,181 @@ function flushNow(ex) {
 }
 
 /* =========================================================================
+   Conversations: sidebar list, switching, creation, deletion.
+
+   The server is the single source of truth for history (see
+   app/conversations_api.py) - this page never keeps its own copy of the
+   message list across turns the way the stateless prototype did. Each
+   exchange only accumulates the text for the turn currently in flight.
+========================================================================= */
+
+let currentConversationId = null;
+let conversations = [];
+
+const sidebarEl = document.getElementById('sidebar');
+const sidebarScrim = document.getElementById('sidebar-scrim');
+const sidebarToggle = document.getElementById('sidebar-toggle');
+const convListEl = document.getElementById('conv-list');
+const newChatBtn = document.getElementById('new-chat');
+const logoutBtn = document.getElementById('logout');
+
+function openSidebar() {
+  sidebarEl.classList.add('open');
+  sidebarScrim.hidden = false;
+}
+function closeSidebar() {
+  sidebarEl.classList.remove('open');
+  sidebarScrim.hidden = true;
+}
+sidebarToggle.addEventListener('click', () => {
+  if (sidebarEl.classList.contains('open')) closeSidebar(); else openSidebar();
+});
+sidebarScrim.addEventListener('click', closeSidebar);
+
+logoutBtn.addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/login.html';
+});
+
+function renderConversationList() {
+  convListEl.innerHTML = '';
+  if (!conversations.length) {
+    const empty = document.createElement('p');
+    empty.className = 'conv-empty';
+    empty.textContent = 'No conversations yet.';
+    convListEl.appendChild(empty);
+    return;
+  }
+  for (const conv of conversations) {
+    const item = document.createElement('div');
+    item.className = 'conv-item';
+    item.dataset.active = String(conv.id === currentConversationId);
+
+    const selectBtn = document.createElement('button');
+    selectBtn.type = 'button';
+    selectBtn.className = 'conv-item-select';
+    selectBtn.textContent = conv.title || 'New conversation';
+    selectBtn.addEventListener('click', () => loadConversation(conv.id));
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'conv-item-delete';
+    deleteBtn.setAttribute('aria-label', `Delete "${conv.title || 'New conversation'}"`);
+    deleteBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteConversation(conv.id);
+    });
+
+    item.appendChild(selectBtn);
+    item.appendChild(deleteBtn);
+    convListEl.appendChild(item);
+  }
+}
+
+async function refreshConversationList() {
+  try {
+    const res = await fetch('/api/conversations');
+    if (!res.ok) return;
+    conversations = await res.json();
+    renderConversationList();
+  } catch {}
+}
+
+async function loadConversation(id) {
+  if (activeExchange) return; // don't switch out from under an in-flight generation
+  const res = await fetch(`/api/conversations/${id}`);
+  if (!res.ok) return;
+  const detail = await res.json();
+  currentConversationId = detail.id;
+  modelSelect.value = detail.model;
+  modelSelect.disabled = true;
+  chatEl.innerHTML = '';
+  for (const m of detail.messages) {
+    if (m.role === 'user') {
+      createUserMessage(m.content);
+    } else if (m.role === 'assistant') {
+      const el = createAssistantMessage();
+      renderExchange({
+        el,
+        state: STATE.DONE,
+        buffer: m.content,
+        thinkingBuffer: m.thinking || '',
+        stoppedEarly: false,
+        historical: true,
+      });
+    }
+  }
+  renderConversationList();
+  closeSidebar();
+  scrollToBottom();
+}
+
+async function deleteConversation(id) {
+  if (!confirm('Delete this conversation? This cannot be undone.')) return;
+  await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+  if (id === currentConversationId) {
+    currentConversationId = null;
+    chatEl.innerHTML = '';
+    modelSelect.disabled = false;
+  }
+  await refreshConversationList();
+}
+
+newChatBtn.addEventListener('click', () => {
+  if (activeExchange) return;
+  currentConversationId = null;
+  chatEl.innerHTML = '';
+  modelSelect.disabled = false;
+  renderConversationList();
+  closeSidebar();
+  input.focus();
+});
+
+async function ensureConversation() {
+  if (currentConversationId !== null) return currentConversationId;
+  const res = await fetch('/api/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelSelect.value }),
+  });
+  const conv = await res.json();
+  currentConversationId = conv.id;
+  modelSelect.disabled = true;
+  await refreshConversationList();
+  return currentConversationId;
+}
+
+/* =========================================================================
+   Auth bootstrap - the whole page requires a session; the only surviving
+   anonymous path is the separate BEARER_TOKEN-gated /api/chat for
+   curl/scripts (see README), not this UI.
+========================================================================= */
+
+async function bootstrap() {
+  const meRes = await fetch('/api/auth/me');
+  if (!meRes.ok) {
+    window.location.href = '/login.html';
+    return;
+  }
+  // Waits for initModels() (called from main(), below) to finish first -
+  // loadConversation() sets modelSelect.value to the conversation's model,
+  // which only works once that value exists as an <option>.
+  await refreshConversationList();
+  if (conversations.length) await loadConversation(conversations[0].id);
+}
+
+async function main() {
+  await initModels();
+  await bootstrap();
+}
+
+/* =========================================================================
    The exchange state machine + network loop
 ========================================================================= */
 
-let conversationMessages = [];
 let activeExchange = null;
 
 function setComposerBusy(busy) {
@@ -917,30 +1253,29 @@ stopBtn.addEventListener('click', () => {
   if (activeExchange) activeExchange.controller.abort();
 });
 
-form.addEventListener('submit', (e) => {
+form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || activeExchange) return;
   input.value = '';
   autoGrow();
+  const convId = await ensureConversation();
   createUserMessage(text);
   const el = createAssistantMessage();
-  conversationMessages.push({ role: 'user', content: text });
-  runExchange(el, text);
+  runExchange(el, `/api/conversations/${convId}/messages`, { content: text });
 });
 
 function retryExchange(prevEx) {
-  if (activeExchange) return;
-  conversationMessages.push({ role: 'user', content: prevEx.userText });
-  runExchange(prevEx.el, prevEx.userText);
+  if (activeExchange || currentConversationId === null) return;
+  runExchange(prevEx.el, `/api/conversations/${currentConversationId}/retry`, null);
 }
 
-async function runExchange(el, userText) {
+async function runExchange(el, url, body) {
   const ex = {
     el,
-    userText,
     state: STATE.SUBMITTED,
     buffer: '',
+    thinkingBuffer: '',
     tokenCount: 0,
     queuePosition: null,
     errorCode: null,
@@ -970,10 +1305,10 @@ async function runExchange(el, userText) {
   resetSilentTimer();
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: conversationMessages, model: modelSelect.value }),
+      body: body ? JSON.stringify(body) : undefined,
       signal: ex.controller.signal,
     });
     resetSilentTimer();
@@ -1021,6 +1356,12 @@ async function runExchange(el, userText) {
           if (ex.firstTokenAt === null) ex.firstTokenAt = performance.now();
           ex.buffer += evt.text;
           ex.tokenCount += 1;
+          markDirty(ex);
+        } else if (evt.type === 'thinking') {
+          // A reasoning model's thinking trace - kept and shown separately
+          // (collapsed by default), never treated as reply text.
+          ex.state = STATE.GENERATING;
+          ex.thinkingBuffer += evt.text;
           markDirty(ex);
         } else if (evt.type === 'queued') {
           ex.state = STATE.QUEUED;
@@ -1070,17 +1411,21 @@ async function runExchange(el, userText) {
     }
   } finally {
     clearTimeout(silentTimer);
-    if (ex.buffer) {
-      conversationMessages.push({ role: 'assistant', content: ex.buffer });
-    } else {
-      conversationMessages.pop(); // nothing came of this - don't replay it to the model
-    }
+    // The server is the single source of truth for history now (see
+    // app/conversations_api.py) - nothing to reconcile locally either way.
+    // Refresh the sidebar regardless of outcome: the user's turn was
+    // persisted the moment it was sent (post_message), which may have set
+    // the conversation's title for the first time or moved it to the top
+    // of the list, even if generation itself then failed.
+    refreshConversationList();
     activeExchange = null;
     setComposerBusy(false);
     refreshLoaded();
     input.focus();
   }
 }
+
+main();
 </script>
 </body>
 </html>

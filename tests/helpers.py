@@ -2,8 +2,14 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.auth_api import router as auth_router
 from app.config import Settings
-from app.ollama import OllamaError
+from app.conversations_api import router as conversations_router
+from app.limiter import GenerationLimiter
+from app.ollama import OllamaClient, OllamaError
 from app.schemas import ChatMessage, OllamaChatChunk, OllamaModelSummary, OllamaRunningModel
 
 
@@ -60,3 +66,31 @@ def fast_settings(**overrides: object) -> Settings:
     }
     defaults.update(overrides)
     return Settings(**defaults)  # type: ignore[arg-type]
+
+
+def make_account_app(
+    session_factory: async_sessionmaker[AsyncSession],
+    ollama: OllamaClient | FakeOllamaClient | None = None,
+    settings: Settings | None = None,
+) -> FastAPI:
+    """Builds an app exposing the auth + conversations routers against a
+    real (temp-file) SQLite database via `session_factory` - mirrors
+    `tests/test_api.py`'s make_app(), extended with the DB state the new
+    routers need on app.state instead of going through the real lifespan
+    (which also runs Alembic migrations - not needed here, see
+    tests/conftest.py's session_factory fixture)."""
+    app = FastAPI()
+    app.include_router(auth_router)
+    app.include_router(conversations_router)
+    app.state.db_session_factory = session_factory
+    app.state.limiter = GenerationLimiter(max_concurrent=1, max_queue_size=5)
+    # Every conversation route declares an OllamaDep, resolved eagerly by
+    # FastAPI before the handler body runs even on a path that never
+    # actually calls it (e.g. retry's "nothing to retry" 400) - app.state.ollama
+    # must exist regardless.
+    app.state.ollama = ollama if ollama is not None else FakeOllamaClient()
+    if settings is not None:
+        from app.config import get_settings
+
+        app.dependency_overrides[get_settings] = lambda: settings
+    return app

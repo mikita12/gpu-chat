@@ -3,6 +3,16 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+# Local SQLite database (dev default path) and its WAL/SHM sidecar files -
+# a real deployment points DATABASE_URL at data/ instead (see
+# systemd/gpu-chat.service), which is also gitignored below.
+*.db
+*.db-wal
+*.db-shm
+data/
+releases/
+current
 # Laptop-only tunnel glue for the temporary laptop-hosted deployment; not
 # needed once this runs on giga2 directly (no SSH tunnel to itself).
 tunnel-watchdog.sh

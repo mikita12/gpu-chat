@@ -32,6 +32,7 @@ from app.schemas import (
     PingEvent,
     QueuedEvent,
     StreamEvent,
+    ThinkingEvent,
 )
 
 
@@ -129,6 +130,8 @@ async def _produce(
         # different task" failure, and can leak the upstream connection.
         async with contextlib.aclosing(ollama.chat(model, messages)) as stream:
             async for chunk in stream:
+                if chunk.message.thinking:
+                    await queue.put(ThinkingEvent(text=chunk.message.thinking))
                 if chunk.message.content:
                     await queue.put(ContentEvent(text=chunk.message.content))
                 if chunk.done:

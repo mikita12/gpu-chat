@@ -4,3 +4,7 @@ httpx==0.28.1
 pydantic==2.13.5
 pydantic-settings==2.15.0
 prometheus-client==0.26.0
+sqlalchemy==2.0.52
+aiosqlite==0.22.1
+alembic==1.19.1
+argon2-cffi==25.1.0

@@ -8,6 +8,10 @@ ExecStart=__REPO_DIR__/current/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --p
 Restart=on-failure
 Environment=OLLAMA_URL=http://127.0.0.1:11434
 Environment=OLLAMA_MODEL=qwen3.8:27b
+# Deliberately outside releases/ - every release is its own disposable git
+# worktree, pruned once superseded (see update.sh). A database living
+# inside one would be deleted on the next auto-deploy.
+Environment=DATABASE_URL=sqlite+aiosqlite:///__REPO_DIR__/data/gpu-chat.db
 
 [Install]
 WantedBy=default.target
